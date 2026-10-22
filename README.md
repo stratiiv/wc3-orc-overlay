@@ -1,79 +1,83 @@
 # WC3 Orc Overlay
 
-Підказки за таймером для Warcraft III: The Frozen Throne. Сценарій: Орда проти Нічного ельфа.
-Угорі екрана показано ігровий час, що робити зараз і що буде далі. На Alt+цифру виводиться,
-як контрити юніта ельфа.
+**English** | [Українська](README.uk.md)
 
-Працює і в **повноекранному режимі**. Підказки малює маленька DLL прямо в кадрі гри
-(Direct3D 8 і Direct3D 9). Пам'ять гри не читається і не змінюється.
+Timed build-order hints for Warcraft III: The Frozen Throne, playing Orc vs Night Elf.
+A strip at the top of the screen shows the game time, what to do right now and the next step.
+Press Alt+number to see how to counter a Night Elf unit.
 
-![приклад](https://github.com/stratiiv/wc3-orc-overlay/releases/download/v1.0/preview.png)
+It works in **exclusive fullscreen** too. A small DLL draws the hints inside the game frame
+(Direct3D 8 and Direct3D 9). It never reads or writes game memory.
 
-## Що в репозиторії
+![preview](https://github.com/stratiiv/wc3-orc-overlay/releases/download/v1.0/preview.png)
 
-| Файл | Що робить |
-|------|-----------|
-| `orc_overlay.pyw` | «Мозок»: таймер, клавіші, звук, розклад підказок. Тільки стандартна бібліотека Python. Без DLL сам показує напівпрозору смужку поверх гри (для режиму Windowed / Borderless). |
-| `orc.c`, `d3d8hook.c`, `d3d9hook.c`, `orc.h` | Код `orc_hints.dll`. DLL бере текст у Python-оверлею через спільну пам'ять і малює його в грі. Якщо оверлей ще не запущений, DLL запускає його сама. |
-| `build.cmd` | Збирання DLL. |
+The hint texts are in Ukrainian. You can translate them in `orc_overlay.pyw` (see [Customizing](#customizing)).
 
-Готова `orc_hints.dll` лежить у [Releases](https://github.com/stratiiv/wc3-orc-overlay/releases).
+## What's inside
 
-## Встановлення
+| File | What it does |
+|------|--------------|
+| `orc_overlay.pyw` | The brain: timer, hotkeys, sound, hint schedule. Python standard library only. Without the DLL it shows a translucent strip over the game by itself (for Windowed / Borderless mode). |
+| `orc.c`, `d3d8hook.c`, `d3d9hook.c`, `orc.h` | Source of `orc_hints.dll`. The DLL reads the text from the Python overlay through shared memory and draws it in the game. If the overlay isn't running yet, the DLL starts it. |
+| `build.cmd` | Builds the DLL. |
 
-Перевірено на Warcraft III 1.26a, Windows 11.
+A prebuilt `orc_hints.dll` is in [Releases](https://github.com/stratiiv/wc3-orc-overlay/releases).
 
-1. **Python 3** з [python.org](https://www.python.org/downloads/). Під час встановлення поставте
-   галочку «Add python.exe to PATH» і не вимикайте tcl/tk та py launcher.
-2. **WFE (Warcraft Feature Extender)** з [GitHub автора](https://github.com/UnryzeC/WFE-Release/releases).
-   Розпакуйте в папку з грою. WFE завантажує нашу DLL у гру.
-3. Покладіть у папку з грою:
-   - `orc_overlay.pyw` поруч із `war3.exe`;
-   - `orc_hints.dll` у підпапку `Libraries` (її створює WFE).
-4. Запустіть `WFEApp.exe` від імені адміністратора і один раз налаштуйте:
-   - **Launcher → Game Path**: шлях до `war3.exe` (або `Frozen Throne.exe`);
-   - увімкніть **Auto-inject** і **Load Additional Libraries**,
-     **Additional Libraries Path** = `Libraries\`;
-   - збережіть профіль.
-5. Запускайте гру кнопкою **Launch** у WFE. Оверлей стартує сам, смужка з'явиться у грі.
+## Installation
 
-> На своїх серверах (iCCup тощо) сторонні DLL можуть бути заборонені. Оверлей зроблено для гри
-> проти AI.
+Tested on Warcraft III 1.26a, Windows 11.
 
-## Клавіші (працюють, коли активна гра)
+1. Install **Python 3** from [python.org](https://www.python.org/downloads/). During setup, tick
+   "Add python.exe to PATH" and keep tcl/tk and the py launcher enabled.
+2. Install **WFE (Warcraft Feature Extender)** from [its author's GitHub](https://github.com/UnryzeC/WFE-Release/releases)
+   and unpack it into the game folder. WFE is what loads our DLL into the game.
+3. Put these files into the game folder:
+   - `orc_overlay.pyw` next to `war3.exe`;
+   - `orc_hints.dll` into the `Libraries` subfolder (WFE creates it).
+4. Run `WFEApp.exe` as administrator and set it up once:
+   - **Launcher → Game Path**: path to `war3.exe` (or `Frozen Throne.exe`);
+   - enable **Auto-inject** and **Load Additional Libraries**,
+     and set **Additional Libraries Path** to `Libraries\`;
+   - save the profile.
+5. Start the game with WFE's **Launch** button. The overlay starts by itself and the strip appears in the game.
 
-| Клавіша | Дія |
-|---------|-----|
-| `Home` | старт / пауза таймера (натисніть у момент старту матчу) |
-| `Page Up` / `Page Down` | +10 с / −10 с |
-| `End` | скинути таймер |
-| `Ctrl+End` | закрити оверлей |
-| `Alt+1…8` | контра на юніта ельфа протягом 8 с: лучниці, мисливиці, дріади, ведмеді, велетні, химери, гіппогрифи/драконята, демонхантер |
+> Third-party DLLs may be banned on community servers (iCCup and others). This overlay is meant
+> for games against the AI.
 
-Коли з'являється нова підказка, лунає короткий звук і рамка на 1,5 с підсвічується жовтим.
+## Hotkeys (they work while the game is focused)
 
-## Налаштування
+| Key | Action |
+|-----|--------|
+| `Home` | start / pause the timer (press it when the match starts) |
+| `Page Up` / `Page Down` | +10 s / −10 s |
+| `End` | reset the timer |
+| `Ctrl+End` | close the overlay |
+| `Alt+1…8` | show the counter to a Night Elf unit for 8 s: archers, huntresses, dryads, bears, mountain giants, chimaeras, hippogryphs / faerie dragons, Demon Hunter |
 
-- Розклад підказок і контри: списки `SCHEDULE`, `MACRO`, `COUNTERS` на початку `orc_overlay.pyw`.
-- `SPEED` в `orc_overlay.pyw`: якщо таймер розходиться з годинником гри.
-- `TOP_PERCENT`, `BASE_W`, `BASE_H`, `BG_ALPHA` в `orc.c`: положення, розмір і прозорість смужки
-  в грі. Після змін DLL треба зібрати заново.
+When a new hint appears, a short sound plays and the frame flashes yellow for 1.5 s.
 
-## Збирання DLL
+## Customizing
+
+- Hint schedule and counters: the `SCHEDULE`, `MACRO` and `COUNTERS` lists at the top of `orc_overlay.pyw`.
+- `SPEED` in `orc_overlay.pyw`: adjust it if the timer drifts from the in-game clock.
+- `TOP_PERCENT`, `BASE_W`, `BASE_H`, `BG_ALPHA` in `orc.c`: position, size and opacity of the
+  in-game strip. Rebuild the DLL after changing them.
+
+## Building the DLL
 
 ```
 winget install MartinStorsjo.LLVM-MinGW.MSVCRT
 build.cmd
 ```
 
-## Як це працює
+## How it works
 
-- Python пише 4 рядки тексту і прапорці (підсвітка, режим контри) у спільну пам'ять
-  `Local\OrcOverlay`. Щоб DLL не прочитала напівзаписаний рядок, використано seqlock.
-- DLL створює тимчасовий пристрій D3D8/D3D9 і з нього дізнається адреси `Present` і `Reset`
-  у `d3d8.dll` / `d3d9.dll`. На Windows 10/11 у кожного пристрою своя vtable, тому DLL перехоплює
-  сам код функцій методом гарячого латання Microsoft (`mov edi, edi` + 5 байтів-заповнювачів).
-  Якщо функцію вже перехопив інший інструмент, наприклад WFE, DLL стає в ланцюжок.
-- У `Present` DLL малює одну текстуру-смужку і відновлює стан пристрою через state block.
-  Перед `Reset`, тобто при Alt+Tab, звільняє свої ресурси.
-- Поки DLL малює в грі, Python ховає своє вікно, щоб смужка не дублювалася.
+- Python writes 4 lines of text and flags (flash, counter mode) into the shared memory
+  `Local\OrcOverlay`. A seqlock keeps the DLL from reading a half-written line.
+- The DLL creates a throwaway D3D8/D3D9 device to find the addresses of `Present` and `Reset`
+  in `d3d8.dll` / `d3d9.dll`. On Windows 10/11 every device has its own vtable, so the DLL hooks
+  the function code itself, using Microsoft's hot-patch layout (`mov edi, edi` plus 5 padding bytes).
+  If another tool such as WFE has already hooked the function, the DLL chains in front of it.
+- Inside `Present`, the DLL draws one textured strip and restores the device state with a state block.
+  Before `Reset` (for example on Alt+Tab), it releases its resources.
+- While the DLL is drawing in the game, the Python overlay hides its own window so the strip doesn't show twice.
