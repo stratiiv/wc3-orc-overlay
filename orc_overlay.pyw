@@ -60,8 +60,17 @@ HWND_TOPMOST = wintypes.HWND(-1)
 
 # Спільна пам'ять для orc_hints.dll, яка малює ту саму смужку всередині гри (і в fullscreen).
 # Розмітка — як struct shared в orc.c.
-MAP_NAME, MAP_SIZE, TEXT_OFF = "Local\\OrcOverlay", 8192, 16
+MAP_NAME, MAP_SIZE, TEXT_OFF = "Local\\OrcOverlay", 8192, 40
 DLL_ALIVE_MS = 1500  # DLL відмітилась нещодавно — гра малює смужку сама, своє вікно ховаємо
+
+# Літери гарячих клавіш на сітці команд унизу праворуч (як у Reforged), QWER / ASDF / ZXCV.
+# Щоб вони відповідали клавішам, згенеруйте сіткові CustomKeys.txt: make_grid_keys.py.
+# Показуються з першого натискання Home до End, щоб не висіли в меню.
+GRID_LETTERS = True
+# Клітинки сітки в одиницях UI гри (екран = 0.8 x 0.6, початок унизу ліворуч), виміряно з
+# текстури консолі 1.26: лівий край, низ нижнього ряду, крок по x, крок по y, розмір клітинки.
+# Якщо в WFE увімкнено widescreen-UI і літери з'їхали, підкрутіть тут.
+GRID = (0.6165, 0.0065, 0.04367, 0.0435, 0.0395)
 
 
 class SharedText:
@@ -81,6 +90,7 @@ class SharedText:
         struct.pack_into("<I", self.m, 0, self.seq)
         self.m[TEXT_OFF:TEXT_OFF + len(data)] = data
         struct.pack_into("<I", self.m, 4, flags)
+        struct.pack_into("<5f", self.m, 16, *GRID)
         self.seq += 1
         struct.pack_into("<I", self.m, 0, self.seq)
 
@@ -203,7 +213,9 @@ class Overlay:
         self.l_action.config(text=lines[1])
         self.l_detail.config(text=lines[2])
         self.l_next.config(text=lines[3])
-        self.shared.publish(lines, (self.flash_until > now) | (left > 0) << 1)
+        started = self.run_from is not None or self.acc > 0
+        flags = (self.flash_until > now) | (left > 0) << 1 | (GRID_LETTERS and started) << 2
+        self.shared.publish(lines, flags)
         self.set_hidden(self.shared.dll_alive())
         self.root.after(30, self.tick)
 

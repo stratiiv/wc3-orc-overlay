@@ -14,8 +14,6 @@ static IDirect3DStateBlock9 *g_sb;
 static int g_tw, g_th;
 static unsigned g_ver;
 
-struct vtx { float x, y, z, rhw, u, v; };
-
 static void release_all(void)
 {
     if (g_tex) IDirect3DTexture9_Release(g_tex);
@@ -30,8 +28,8 @@ static void draw(IDirect3DDevice9 *dev)
     D3DSURFACE_DESC d;
     D3DLOCKED_RECT lr;
     const struct ovl_frame *f;
-    float x0, y0, x1, y1, u, v;
-    int y;
+    struct vtx v[13 * 6];
+    int y, n;
 
     if (dev != g_dev) { g_tex = NULL; g_sb = NULL; g_dev = dev; }
     if (IDirect3DDevice9_TestCooperativeLevel(dev) != D3D_OK) return;
@@ -84,15 +82,10 @@ static void draw(IDirect3DDevice9 *dev)
     IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
     IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 
-    x0 = f->x - 0.5f; y0 = f->y - 0.5f; x1 = x0 + f->w; y1 = y0 + f->h;
-    u = (float)f->w / g_tw; v = (float)f->h / g_th;
-    {
-        struct vtx q[4] = {{x0, y0, 0, 1, 0, 0}, {x1, y0, 0, 1, u, 0},
-                           {x0, y1, 0, 1, 0, v}, {x1, y1, 0, 1, u, v}};
-        if (SUCCEEDED(IDirect3DDevice9_BeginScene(dev))) {
-            IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, sizeof(q[0]));
-            IDirect3DDevice9_EndScene(dev);
-        }
+    n = ovl_vertices(f, g_tw, g_th, v);
+    if (SUCCEEDED(IDirect3DDevice9_BeginScene(dev))) {
+        IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLELIST, n / 3, v, sizeof(v[0]));
+        IDirect3DDevice9_EndScene(dev);
     }
     IDirect3DStateBlock9_Apply(g_sb);
 }

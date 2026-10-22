@@ -1,5 +1,6 @@
-/* orc_hints.dll — малює підказки orc_overlay.pyw прямо в кадрі Warcraft 3.
- * Текст бере зі спільної пам'яті "Local\OrcOverlay", яку пише Python-оверлей.
+/* orc_hints.dll — малює підказки orc_overlay.pyw прямо в кадрі Warcraft 3,
+ * а також літери гарячих клавіш (як у Reforged) на сітці команд унизу праворуч.
+ * Текст і геометрію сітки бере зі спільної пам'яті "Local\OrcOverlay", яку пише Python-оверлей.
  * Завантажується WFE (папка Libraries) або будь-яким інжектором. */
 #include "orc.h"
 #include <shellapi.h>
@@ -11,13 +12,19 @@
 #define TOP_PERCENT 11      /* відступ зверху, % висоти: щоб не закривати годинник WC3 */
 #define BG_ALPHA 204        /* непрозорість фону, 0..255 (~80%) */
 #define PY_TIMEOUT_MS 3000  /* Python мовчить довше — ховаємо смужку */
+#define LETTER_SCALE 0.40f  /* розмір літери відносно клітинки сітки */
+#define LETTER_RGB RGB(255, 204, 0)  /* колір підсвітки гарячих клавіш WC3 */
+
+static const WCHAR GRID_KEYS[] = L"QWERASDFZXCV";
 
 struct shared {
     volatile LONG seq;        /* непарне — Python саме пише */
-    volatile LONG flags;      /* біт 0 — підсвітка рамки, біт 1 — режим контри */
+    volatile LONG flags;      /* біт 0 — підсвітка рамки, біт 1 — контра, біт 2 — літери сітки */
     volatile DWORD dll_beat;  /* GetTickCount від DLL: Python ховає своє вікно */
     volatile DWORD py_beat;   /* GetTickCount від Python */
-    WCHAR text[(MAP_SIZE - 16) / 2];  /* 4 рядки через \n */
+    float grid[5];            /* лівий край, низ, крок x, крок y, розмір клітинки — в одиницях UI 0.8 x 0.6 */
+    DWORD pad;
+    WCHAR text[(MAP_SIZE - 40) / 2];  /* 4 рядки через \n */
 };
 
 volatile int g_in_d3d8;
@@ -25,13 +32,15 @@ static HMODULE g_self;
 static struct shared *g_shm;
 static DWORD g_next_open;
 static LONG g_seq_drawn = -1;
-static int g_bb_h, g_flags;
+static int g_bb_w, g_bb_h, g_flags;
+static float g_grid[5];
 static WCHAR g_text[512];
 
 static HDC g_dc;
 static HBITMAP g_bmp;
 static unsigned *g_bits;
-static HFONT g_big, g_small, g_tiny;
+static HFONT g_big, g_small, g_tiny, g_letter;
+static int g_sw, g_sh, g_lsz;  /* смужка і літера, для яких створено шрифти */
 static struct ovl_frame g_frame;
 
 /* Гаряче латання Microsoft: перед функцією 5 байтів-заповнювачів, на початку "mov edi, edi".
@@ -61,19 +70,22 @@ static HFONT font(int px, int bold)
                        DEFAULT_PITCH, L"Segoe UI");
 }
 
-static void resize(int w, int h, float s)
+static void resize(int sw, int sh, int lsz, float s)
 {
-    BITMAPINFO bi = {{sizeof(bi.bmiHeader), w, -h, 1, 32, BI_RGB}};
+    int aw = sw > 12 * lsz ? sw : 12 * lsz, ah = sh + lsz;
+    BITMAPINFO bi = {{sizeof(bi.bmiHeader), aw, -ah, 1, 32, BI_RGB}};
     if (g_bmp) DeleteObject(g_bmp);
-    if (g_big) { DeleteObject(g_big); DeleteObject(g_small); DeleteObject(g_tiny); }
+    if (g_big) { DeleteObject(g_big); DeleteObject(g_small); DeleteObject(g_tiny); DeleteObject(g_letter); }
     if (!g_dc) g_dc = CreateCompatibleDC(NULL);
     g_bmp = CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, (void **)&g_bits, NULL, 0);
     SelectObject(g_dc, g_bmp);
     g_big = font((int)(20 * s), 1);
     g_small = font((int)(15 * s), 0);
     g_tiny = font((int)(13 * s), 0);
-    g_frame.w = w;
-    g_frame.h = h;
+    g_letter = font(lsz * 8 / 10, 1);  /* з запасом на контур, щоб W влазила в клітинку */
+    g_sw = sw; g_sh = sh; g_lsz = lsz;
+    g_frame.w = aw;
+    g_frame.h = ah;
     g_frame.px = g_bits;
 }
 
@@ -81,7 +93,7 @@ static void line(const WCHAR **p, HFONT f, COLORREF c, int *y, int lh)
 {
     const WCHAR *end = wcschr(*p, L'\n');
     int n = end ? (int)(end - *p) : lstrlenW(*p);
-    RECT r = {8, *y, g_frame.w - 8, *y + lh};
+    RECT r = {8, *y, g_sw - 8, *y + lh};
     SelectObject(g_dc, f);
     SetTextColor(g_dc, c);
     DrawTextW(g_dc, *p, n, &r, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
@@ -89,49 +101,121 @@ static void line(const WCHAR **p, HFONT f, COLORREF c, int *y, int lh)
     *y += lh;
 }
 
-static void redraw(int bb_h)
+/* Літера з темним контуром: спершу маска контуру, потім маска самої літери. */
+static void glyph(int x0, int y0, WCHAR ch)
 {
-    float s = bb_h / 1080.0f;
-    int w, h, b, i;
+    static unsigned char outline[128 * 128];
+    int n = g_lsz, o = n / 14 > 1 ? n / 14 : 1, x, y, dx, dy;
+    RECT cell = {x0, y0, x0 + n, y0 + n};
+    unsigned col = ((LETTER_RGB & 0xFF) << 16) | (LETTER_RGB & 0xFF00) | ((LETTER_RGB >> 16) & 0xFF);
+    if (n > 128) return;
+    FillRect(g_dc, &cell, GetStockObject(BLACK_BRUSH));  /* прибрати, що «натекло» від сусідньої літери */
+    SelectObject(g_dc, g_letter);
+    SetTextColor(g_dc, RGB(255, 255, 255));
+    for (dy = -o; dy <= o; dy++)
+        for (dx = -o; dx <= o; dx++) {
+            RECT r = {x0 + o + 1 + dx, y0 + dy, x0 + n + dx, y0 + n + dy};
+            DrawTextW(g_dc, &ch, 1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+        }
+    GdiFlush();
+    for (y = 0; y < n; y++)
+        for (x = 0; x < n; x++) outline[y * n + x] = (unsigned char)(g_bits[(y0 + y) * g_frame.w + x0 + x] >> 16);
+    FillRect(g_dc, &cell, GetStockObject(BLACK_BRUSH));
+    {
+        RECT r = {x0 + o + 1, y0, x0 + n, y0 + n};
+        DrawTextW(g_dc, &ch, 1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+    }
+    GdiFlush();
+    for (y = 0; y < n; y++)
+        for (x = 0; x < n; x++) {
+            unsigned *p = &g_bits[(y0 + y) * g_frame.w + x0 + x];
+            unsigned a1 = (*p >> 16) & 0xFF, a2 = outline[y * n + x], a = a1 > a2 ? a1 : a2;
+            unsigned k = a ? a1 * 255 / a : 0;  /* частка літери, решта — чорний контур */
+            *p = (a << 24) | ((((col >> 16) & 0xFF) * k / 255) << 16) |
+                 ((((col >> 8) & 0xFF) * k / 255) << 8) | ((col & 0xFF) * k / 255);
+        }
+}
+
+static void redraw(int bb_w, int bb_h)
+{
+    float s = bb_h / 1080.0f, cell = g_grid[4] / 0.6f * bb_h;
+    int sw, sh, lsz, b, i, x, y;
     const WCHAR *p = g_text;
     RECT all;
     if (s < 0.85f) s = 0.85f;  /* дрібніше вже не читається */
-    w = (int)(BASE_W * s);
-    h = (int)(BASE_H * s);
-    if (w != g_frame.w || h != g_frame.h) resize(w, h, s);
+    sw = (int)(BASE_W * s);
+    sh = (int)(BASE_H * s);
+    lsz = (int)(cell * LETTER_SCALE);
+    if (lsz < 8) lsz = 8;
+    if (lsz > 128) lsz = 128;
+    if (sw != g_sw || sh != g_sh || lsz != g_lsz) resize(sw, sh, lsz, s);
     if (!g_bits) return;
 
-    SetRect(&all, 0, 0, w, h);
+    SetRect(&all, 0, 0, g_frame.w, g_frame.h);
     FillRect(g_dc, &all, GetStockObject(BLACK_BRUSH));
     SetBkMode(g_dc, TRANSPARENT);
-    {
-        int y = (int)(4 * s);
-        line(&p, g_big, (g_flags & 2) ? RGB(255, 112, 112) : RGB(255, 255, 255), &y, (int)(28 * s));
-        line(&p, g_big, RGB(255, 211, 77), &y, (int)(28 * s));
-        line(&p, g_small, RGB(208, 208, 208), &y, (int)(23 * s));
-        line(&p, g_tiny, RGB(150, 150, 150), &y, (int)(21 * s));
-    }
+    y = (int)(4 * s);
+    line(&p, g_big, (g_flags & 2) ? RGB(255, 112, 112) : RGB(255, 255, 255), &y, (int)(28 * s));
+    line(&p, g_big, RGB(255, 211, 77), &y, (int)(28 * s));
+    line(&p, g_small, RGB(208, 208, 208), &y, (int)(23 * s));
+    line(&p, g_tiny, RGB(150, 150, 150), &y, (int)(21 * s));
     GdiFlush();
-    for (i = 0; i < w * h; i++)
-        g_bits[i] = (g_bits[i] & 0xFFFFFF) | ((unsigned)BG_ALPHA << 24);
+    for (y = 0; y < sh; y++)
+        for (x = 0; x < sw; x++) {
+            unsigned *px = &g_bits[y * g_frame.w + x];
+            *px = (*px & 0xFFFFFF) | ((unsigned)BG_ALPHA << 24);
+        }
     if (g_flags & 1) {  /* жовта рамка на нову підказку */
         b = (int)(4 * s) > 2 ? (int)(4 * s) : 2;
-        for (i = 0; i < w * h; i++) {
-            int x = i % w, y = i / w;
-            if (x < b || y < b || x >= w - b || y >= h - b) g_bits[i] = 0xFFFFCC00;
+        for (y = 0; y < sh; y++)
+            for (x = 0; x < sw; x++)
+                if (x < b || y < b || x >= sw - b || y >= sh - b) g_bits[y * g_frame.w + x] = 0xFFFFCC00;
+    }
+
+    g_frame.q[0] = (struct ovl_quad){(float)((bb_w - sw) / 2), (float)(bb_h * TOP_PERCENT / 100),
+                                     (float)sw, (float)sh, 0, 0};
+    g_frame.nq = 1;
+    if (g_flags & 4) {  /* літери сітки: клітинка (рядок r, стовпець c), рядок 0 — верхній */
+        float inset = cell * 0.06f;
+        for (i = 0; i < 12; i++) {
+            int r = i / 4, c = i % 4;
+            float ui_x = g_grid[0] + c * g_grid[2];
+            float ui_top = g_grid[1] + (2 - r) * g_grid[3] + g_grid[4];
+            glyph(i * lsz, sh, GRID_KEYS[i]);
+            g_frame.q[g_frame.nq++] = (struct ovl_quad){ui_x / 0.8f * bb_w + inset,
+                                                        (0.6f - ui_top) / 0.6f * bb_h + inset,
+                                                        (float)lsz, (float)lsz, i * lsz, sh};
         }
     }
     g_frame.version++;
+}
+
+int ovl_vertices(const struct ovl_frame *f, int tw, int th, struct vtx *out)
+{
+    int i, n = 0;
+    for (i = 0; i < f->nq; i++) {
+        const struct ovl_quad *q = &f->q[i];
+        float x0 = q->x - 0.5f, y0 = q->y - 0.5f, x1 = x0 + q->w, y1 = y0 + q->h;
+        float u0 = (float)q->u / tw, v0 = (float)q->v / th;
+        float u1 = (q->u + q->w) / tw, v1 = (q->v + q->h) / th;
+        struct vtx a = {x0, y0, 0, 1, u0, v0}, b = {x1, y0, 0, 1, u1, v0};
+        struct vtx c = {x0, y1, 0, 1, u0, v1}, d = {x1, y1, 0, 1, u1, v1};
+        out[n++] = a; out[n++] = b; out[n++] = c;
+        out[n++] = c; out[n++] = b; out[n++] = d;
+    }
+    return n;
 }
 
 /* Копія тексту без розірваних рядків: seqlock, Python робить seq непарним на час запису. */
 static int read_text(LONG *seq)
 {
     LONG s1 = g_shm->seq;
+    int i;
     if (s1 & 1) return 0;
     MemoryBarrier();
     lstrcpynW(g_text, (const WCHAR *)g_shm->text, ARRAYSIZE(g_text));
     g_flags = g_shm->flags;
+    for (i = 0; i < 5; i++) g_grid[i] = g_shm->grid[i];
     MemoryBarrier();
     if (g_shm->seq != s1) return 0;
     *seq = s1;
@@ -160,16 +244,15 @@ const struct ovl_frame *ovl_frame(int bb_w, int bb_h)
         return NULL;
     }
     g_shm->dll_beat = now;
-    if ((g_shm->seq != g_seq_drawn || bb_h != g_bb_h) && read_text(&seq)) {
+    if ((g_shm->seq != g_seq_drawn || bb_w != g_bb_w || bb_h != g_bb_h) && read_text(&seq)) {
         g_seq_drawn = seq;
+        g_bb_w = bb_w;
         g_bb_h = bb_h;
-        redraw(bb_h);
-        LOG("redraw seq %ld bb %dx%d -> %dx%d v%u", seq, bb_w, bb_h, g_frame.w, g_frame.h, g_frame.version);
+        redraw(bb_w, bb_h);
+        LOG("redraw seq %ld bb %dx%d atlas %dx%d quads %d v%u", seq, bb_w, bb_h, g_frame.w, g_frame.h,
+            g_frame.nq, g_frame.version);
     }
-    if (!g_frame.version) return NULL;
-    g_frame.x = (bb_w - g_frame.w) / 2;
-    g_frame.y = bb_h * TOP_PERCENT / 100;
-    return &g_frame;
+    return g_frame.version ? &g_frame : NULL;
 }
 
 /* Запускає orc_overlay.pyw, якщо він ще не працює: шукає поруч із DLL і на рівень вище. */
@@ -201,7 +284,7 @@ static DWORD WINAPI init(LPVOID unused)
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     launch_python();
 
-    /* Тимчасовий пристрій D3D лише для того, щоб знайти vtable і підмінити Present/Reset. */
+    /* Тимчасовий пристрій D3D лише для того, щоб знайти код Present/Reset і перехопити його. */
     wc.lpfnWndProc = DefWindowProcW;
     wc.hInstance = g_self;
     wc.lpszClassName = L"OrcHintsDummy";
