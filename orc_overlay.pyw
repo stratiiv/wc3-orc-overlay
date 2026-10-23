@@ -5,6 +5,7 @@ Alt+1..8 — контра на юніта ельфа (8 с).
 """
 import ctypes
 import mmap
+import random
 import struct
 import sys
 import time
@@ -13,7 +14,7 @@ import winsound
 from ctypes import wintypes
 
 SPEED = 1.0  # ігрових секунд за реальну; підкрути, якщо таймер розходиться з годинником гри
-WIDTH, HEIGHT, ALPHA = 600, 100, 0.8
+WIDTH, ALPHA = 600, 0.8  # ширина при 100% масштабі; висота — за текстом
 FLASH_MS, COUNTER_SEC = 1500, 8
 
 SCHEDULE = [  # (сек, тема, що робити, деталь)
@@ -50,6 +51,31 @@ COUNTERS = {
     0x37: ("Гіппогрифи / драконята", "Troll Headhunter, виверни"),
     0x38: ("Демонхантер", "Hex від Shadow Hunter", "Уся армія — правим кліком по ньому"),
 }
+# «Чи знали ви?» — у нижньому рядку по черзі з «Далі …», у випадковому порядку
+TIP_SEC = 10  # 10 с «Далі …», 10 с порада
+TIPS = [
+    "Ctrl+цифра — зробити контрол-групу з виділених, цифра — виділити її",
+    "Двічі натисни цифру групи — камера перескочить до неї",
+    "Додати юніта в групу: цифра, Shift+клік по новому, знову Ctrl+цифра",
+    "Shift+клік прибирає юніта з виділення — так само чистиш групу",
+    "Групи: 1 — герой, 2 — гранти й таурени, 3 — тролі й вершники",
+    "Будівлі теж у групи: Great Hall на 5, казарми й звіринець на 6",
+    "F1 виділяє першого героя, подвійний F1 — камера до нього",
+    "У групі до 12 юнітів; Tab перемикає типи, щоб кастувати їхні вміння",
+    "Подвійний клік по юніту виділяє всіх таких на екрані",
+    "Backspace — камера до головної бази",
+    "Нову армію відразу в групу, поки ще стоїть біля казарми",
+    "Поранений юніт атакує ззаду — відведи його, AI добиває слабких",
+    "Фокус: уся армія б'є одну ціль, а не кожен свою",
+    "Атака з ходу: юніти б'ють усе дорогою, а не біжать крізь ворога",
+    "Оточи ворожого героя грантами — йому нікуди тікати",
+    "Shift ставить накази в чергу: пеону кілька будівель поспіль",
+    "Правий клік по вмінню вмикає автокаст (Bloodlust у шаманів)",
+    "Герой нижче третини HP — назад або Salve: смерть героя дає ворогу досвід",
+    "Ельфи на базі — Battle Stations: пеони ховаються в Burrow і стріляють",
+    "Лучниці слабкі в ближньому бою — гранти в лоб, лучниць першими",
+    "Не бийся під вежами ельфа — витягни його армію до себе",
+]
 
 VK_CONTROL, VK_MENU, VK_PRIOR, VK_NEXT, VK_END, VK_HOME = 0x11, 0x12, 0x21, 0x22, 0x23, 0x24
 GWL_EXSTYLE = -20
@@ -98,6 +124,11 @@ class SharedText:
         beat = struct.unpack_from("<I", self.m, 8)[0]
         return beat != 0 and (self.tick() - beat) & 0xFFFFFFFF < DLL_ALIVE_MS
 
+    def clicks(self):
+        """Лічильники кліків по кнопках смужки в грі (рахує DLL): (згорнути, закрити)."""
+        v = struct.unpack_from("<I", self.m, 36)[0]
+        return v & 0xFFFF, v >> 16
+
 
 def hint_at(t):
     """(початок, тема, дія, деталь, початок наступної) для ігрового часу t."""
@@ -125,29 +156,42 @@ class Overlay:
         self.keys = {}
         self.flash_until, self.hidden = 0.0, False
         self.shared = SharedText()
+        self.clicks = self.shared.clicks()
+        self.tips, self.tip_slot, self.tip = [], None, ""
 
         r = self.root = tk.Tk()
         r.overrideredirect(True)
         r.attributes("-topmost", True)
         r.attributes("-alpha", ALPHA)
-        r.geometry(f"{WIDTH}x{HEIGHT}+{(r.winfo_screenwidth() - WIDTH) // 2}+0")
+        w = int(WIDTH * r.winfo_fpixels("1i") / 96)  # шрифти ростуть з масштабом Windows — і ширина теж
+        r.geometry(f"+{(r.winfo_screenwidth() - w) // 2}+0")  # без розміру: висоту Tk бере з вмісту
         r.config(bg="#1b1b1b")
         inner = tk.Frame(r, bg="#1b1b1b")
         inner.pack(fill="both", expand=True, padx=4, pady=4)
+        tk.Frame(inner, width=w - 8, height=0, bg="#1b1b1b").pack()  # тримає ширину сталою
         mk = lambda size, fg, bold: tk.Label(
             inner, bg="#1b1b1b", fg=fg, font=("Segoe UI", size, "bold" if bold else "normal"),
-            anchor="center", wraplength=WIDTH - 20)
+            anchor="center", wraplength=w - 20)
         self.l_head = mk(14, "#ffffff", True)
         self.l_action = mk(14, "#ffd34d", True)
         self.l_detail = mk(10, "#d0d0d0", False)
         self.l_next = mk(9, "#8a8a8a", False)
         for lbl in (self.l_head, self.l_action, self.l_detail, self.l_next):
             lbl.pack(fill="x")
+        self.collapsed = False
+        bar = tk.Frame(r, bg="#1b1b1b")  # кнопки мишкою: згорнути / закрити
+        bar.place(relx=1.0, x=-4, y=2, anchor="ne")
+        for text, cmd in (("–", self.toggle), ("×", r.destroy)):
+            b = tk.Label(bar, text=text, bg="#1b1b1b", fg="#bbbbbb", font=("Segoe UI", 12, "bold"), cursor="hand2")
+            b.pack(side="left", padx=3)
+            b.bind("<Button-1>", lambda e, c=cmd: c())
+        self.b_collapse = bar.winfo_children()[0]
 
         r.update_idletasks()
         self.hwnd = wintypes.HWND(self.user32.GetParent(r.winfo_id()))
         ex = self.user32.GetWindowLongW(self.hwnd, GWL_EXSTYLE)
-        ex = (ex | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
+        # без WS_EX_TRANSPARENT: кнопки мають ловити клік; NOACTIVATE не забирає фокус у гри
+        ex = (ex | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_APPWINDOW
         self.user32.SetWindowLongW(self.hwnd, GWL_EXSTYLE, ex)
 
         self.tick()
@@ -185,13 +229,39 @@ class Overlay:
                 self.flash()
         return True
 
+    def toggle(self):
+        self.collapsed = not self.collapsed
+        self.b_collapse.config(text="+" if self.collapsed else "–")
+        for lbl in (self.l_action, self.l_detail, self.l_next):
+            lbl.pack_forget() if self.collapsed else lbl.pack(fill="x")
+
+    def handle_clicks(self):
+        # кнопки на смужці в грі: DLL лише рахує кліки, рішення тут
+        (c0, x0), self.clicks = self.clicks, self.shared.clicks()
+        if self.clicks[1] != x0:
+            self.root.destroy()
+            return False
+        if (self.clicks[0] - c0) % 2:
+            self.toggle()
+        return True
+
+    def tip_line(self, now):
+        slot = int(now // TIP_SEC)
+        if slot % 2 == 0:
+            return None
+        if slot != self.tip_slot:
+            if not self.tips:
+                self.tips = random.sample(TIPS, len(TIPS))
+            self.tip_slot, self.tip = slot, self.tips.pop()
+        return f"Чи знали ви? {self.tip}"
+
     def flash(self):
         self.flash_until = time.monotonic() + FLASH_MS / 1000
         self.root.config(bg="#ffcc00")
         self.root.after(FLASH_MS, lambda: self.root.config(bg="#1b1b1b"))
 
     def tick(self):
-        if not self.handle_keys():
+        if not (self.handle_keys() and self.handle_clicks()):
             return
         t = self.game_time()
         start, topic, action, detail, nxt = hint_at(t)
@@ -208,14 +278,14 @@ class Overlay:
             head, action, detail = f"{fmt(t)}{paused}   КОНТРА: {name}", text, " · ".join([*rest, f"ще {int(left) + 1} с"])
         else:
             head = f"{fmt(t)}{paused}   {topic}"
-        lines = (head, action, detail, f"Далі {fmt(nxt)}: {hint_at(nxt)[2]}")
+        lines = (head, action, detail, self.tip_line(now) or f"Далі {fmt(nxt)}: {hint_at(nxt)[2]}")
         self.l_head.config(text=lines[0], fg="#ff7070" if left > 0 else "#ffffff")
         self.l_action.config(text=lines[1])
         self.l_detail.config(text=lines[2])
         self.l_next.config(text=lines[3])
         started = self.run_from is not None or self.acc > 0
-        flags = (self.flash_until > now) | (left > 0) << 1 | (GRID_LETTERS and started) << 2
-        self.shared.publish(lines, flags)
+        flags = (self.flash_until > now) | (left > 0) << 1 | (GRID_LETTERS and started) << 2 | self.collapsed << 3
+        self.shared.publish(lines[:1] if self.collapsed else lines, flags)
         self.set_hidden(self.shared.dll_alive())
         self.root.after(30, self.tick)
 
@@ -239,6 +309,7 @@ def self_check():
     assert hint_at(720)[1:3] == SCOUT[:2] and hint_at(900)[1:3] == SCOUT[:2]
     cycle = [hint_at(720 + 45 * k)[2] for k in range(1, 8) if k % 4]
     assert cycle[:4] == [m[1] for m in MACRO] and cycle[4] == MACRO[0][1]
+    assert all(len(t) <= 75 for t in TIPS)  # довше не влазить у нижній рядок смужки
     print("ok")
 
 

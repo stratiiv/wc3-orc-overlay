@@ -4,7 +4,8 @@
 
 Timed build-order hints for Warcraft III: The Frozen Throne, playing Orc vs Night Elf.
 A strip at the top of the screen shows the game time, what to do right now and the next step.
-Press Alt+number to see how to counter a Night Elf unit.
+Press Alt+number to see how to counter a Night Elf unit. Every 10 seconds the bottom line shows a random
+"Did you know?" tip: control groups, adding units to a group, recommended groups, micro.
 
 It works in **exclusive fullscreen** too. A small DLL draws the hints inside the game frame
 (Direct3D 8 and Direct3D 9). It never reads or writes game memory.
@@ -66,9 +67,12 @@ Tested on Warcraft III 1.26a, Windows 11.
 
 When a new hint appears, a short sound plays and the frame flashes yellow for 1.5 s.
 
+The strip has two mouse buttons in its top-right corner: `–` collapses it to the timer line (`+` expands it again),
+`×` closes the overlay. They work in the game too, including exclusive fullscreen.
+
 ## Customizing
 
-- Hint schedule and counters: the `SCHEDULE`, `MACRO` and `COUNTERS` lists at the top of `orc_overlay.pyw`.
+- Hint schedule, counters and tips: the `SCHEDULE`, `MACRO`, `COUNTERS` and `TIPS` lists at the top of `orc_overlay.pyw`.
 - `SPEED` in `orc_overlay.pyw`: adjust it if the timer drifts from the in-game clock.
 - `TOP_PERCENT`, `BASE_W`, `BASE_H`, `BG_ALPHA` in `orc.c`: position, size and opacity of the
   in-game strip. Rebuild the DLL after changing them.
@@ -98,3 +102,5 @@ build.cmd
   the device state with a state block.
   Before `Reset` (for example on Alt+Tab), it releases its resources.
 - While the DLL is drawing in the game, the Python overlay hides its own window so the strip doesn't show twice.
+- The DLL subclasses the game window to catch clicks on the `–` / `×` buttons (and keeps them from reaching the game).
+  It only counts the clicks in shared memory; the Python overlay decides what to do.

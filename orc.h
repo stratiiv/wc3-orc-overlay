@@ -18,8 +18,8 @@ struct ovl_frame {
 
 struct vtx { float x, y, z, rhw, u, v; };
 
-/* Викликати раз на кадр з розміром backbuffer; NULL — нічого не малювати. */
-const struct ovl_frame *ovl_frame(int bb_w, int bb_h);
+/* Викликати раз на кадр з розміром backbuffer і вікном гри (для кліків по кнопках); NULL — нічого не малювати. */
+const struct ovl_frame *ovl_frame(int bb_w, int bb_h, HWND wnd);
 
 /* Трикутники для DrawPrimitiveUP(TRIANGLELIST); повертає кількість вершин. */
 int ovl_vertices(const struct ovl_frame *f, int tex_w, int tex_h, struct vtx *out);

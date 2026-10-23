@@ -179,8 +179,9 @@ def regrid(sample_text, positions):
         p = positions.get(sec, {})
         pos = p.get(pos_key) or (p.get("Buttonpos") if pos_key == "Unbuttonpos" else None)
         new = grid_key(pos) if pos and pos_key else None
-        if new and len(val.strip()) == 1:  # leave special keys (512 = Esc) alone
-            line, changed = f"{key}={new}", changed + 1
+        levels = val.strip().split(",")  # upgrades list one key per level: "M,M,M"
+        if new and all(len(v) == 1 for v in levels):  # leave special keys (512 = Esc) alone
+            line, changed = f"{key}={','.join([new] * len(levels))}", changed + 1
         out.append(line)
     text = "\n".join(out) + "\n"
     return text, changed
@@ -191,14 +192,14 @@ def fix_tips(text):
     out, keys = [], {}
     blocks = re.split(r"(?m)^(?=\[)", text)
     for block in blocks:
-        hk = re.search(r"(?m)^Hotkey=(\w)$", block)
-        rk = re.search(r"(?m)^Researchhotkey=(\w)$", block)
-        uk = re.search(r"(?m)^Unhotkey=(\w)$", block)
+        hk = re.search(r"(?m)^Hotkey=(\w)(?:,\w)*$", block)
+        rk = re.search(r"(?m)^Researchhotkey=(\w)(?:,\w)*$", block)
+        uk = re.search(r"(?m)^Unhotkey=(\w)(?:,\w)*$", block)
 
         def sub(field, m):
             nonlocal block
             if m:
-                block = re.sub(rf"(?m)^({field}=.*)$",
+                block = re.sub(rf'(?m)^("?{field}=.*)$',  # hero skills: "Tip=""..."",""..."""
                                lambda t: re.sub(r"\|cffffcc00\w\|r", f"|cffffcc00{m.group(1)}|r", t.group(1)), block)
 
         sub("Tip", hk)
@@ -222,10 +223,14 @@ def main():
 def self_check():
     assert grid_key("0,0") == "Q" and grid_key("3,2") == "V" and grid_key("1,1") == "S"
     assert grid_key("0,-11") is None
-    sample = "[obar]\nTip=Build |cffffcc00B|rarracks\nHotkey=B\n[CmdCancel]\nHotkey=512\n"
-    text, n = regrid(sample, {"obar": {"Buttonpos": "1,0"}, "CmdCancel": {"Buttonpos": "3,2"}})
+    sample = ("[obar]\nTip=Build |cffffcc00B|rarracks\nHotkey=B\n[CmdCancel]\nHotkey=512\n"
+              "[Rome]\nTip=Iron (|cffffcc00M|r),Steel (|cffffcc00M|r)\nHotkey=M,M\n"
+              '[AOhx]\n"Tip=""Hex (|cffffcc00X|r)"""\nHotkey=X\n')
+    text, n = regrid(sample, {"obar": {"Buttonpos": "1,0"}, "CmdCancel": {"Buttonpos": "3,2"},
+                              "Rome": {"Buttonpos": "0,0"}, "AOhx": {"Buttonpos": "3,2"}})
     text = fix_tips(text)
-    assert "Hotkey=W" in text and "|cffffcc00W|r" in text and "Hotkey=512" in text and n == 1
+    assert "Hotkey=W\n" in text and "|cffffcc00W|r" in text and "Hotkey=512" in text and n == 3
+    assert "Hotkey=Q,Q" in text and "Steel (|cffffcc00Q|r)" in text and "Hex (|cffffcc00V|r)" in text
     print("ok")
 
 

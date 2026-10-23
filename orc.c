@@ -9,6 +9,8 @@
 #define MAP_SIZE 8192
 #define BASE_W 600          /* розмір смужки при висоті екрана 1080, далі масштабується */
 #define BASE_H 106
+#define SMALL_H 36          /* згорнута смужка: лише рядок з таймером */
+#define BTN 26              /* кнопки «згорнути» і «закрити» в правому верхньому куті */
 #define TOP_PERCENT 11      /* відступ зверху, % висоти: щоб не закривати годинник WC3 */
 #define BG_ALPHA 204        /* непрозорість фону, 0..255 (~80%) */
 #define PY_TIMEOUT_MS 3000  /* Python мовчить довше — ховаємо смужку */
@@ -23,7 +25,7 @@ struct shared {
     volatile DWORD dll_beat;  /* GetTickCount від DLL: Python ховає своє вікно */
     volatile DWORD py_beat;   /* GetTickCount від Python */
     float grid[5];            /* лівий край, низ, крок x, крок y, розмір клітинки — в одиницях UI 0.8 x 0.6 */
-    DWORD pad;
+    volatile DWORD clicks;    /* кліки по кнопках: молодші 16 біт — згорнути, старші — закрити */
     WCHAR text[(MAP_SIZE - 40) / 2];  /* 4 рядки через \n */
 };
 
@@ -41,7 +43,13 @@ static HBITMAP g_bmp;
 static unsigned *g_bits;
 static HFONT g_big, g_small, g_tiny, g_letter;
 static int g_sw, g_sh, g_lsz;  /* смужка і літера, для яких створено шрифти */
+static int g_margin;           /* відступ тексту від країв смужки */
 static struct ovl_frame g_frame;
+
+static HWND g_wnd;
+static WNDPROC g_old_proc;
+static int g_unicode;
+static RECT g_btn[2];          /* згорнути, закрити — у пікселях backbuffer */
 
 /* Гаряче латання Microsoft: перед функцією 5 байтів-заповнювачів, на початку "mov edi, edi".
  * Пишемо "jmp hook" у заповнювач і "jmp $-5" поверх mov edi, edi; оригінал далі з fn+2.
@@ -93,7 +101,7 @@ static void line(const WCHAR **p, HFONT f, COLORREF c, int *y, int lh)
 {
     const WCHAR *end = wcschr(*p, L'\n');
     int n = end ? (int)(end - *p) : lstrlenW(*p);
-    RECT r = {8, *y, g_sw - 8, *y + lh};
+    RECT r = {g_margin, *y, g_sw - g_margin, *y + lh};
     SelectObject(g_dc, f);
     SetTextColor(g_dc, c);
     DrawTextW(g_dc, *p, n, &r, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
@@ -139,12 +147,12 @@ static void glyph(int x0, int y0, WCHAR ch)
 static void redraw(int bb_w, int bb_h)
 {
     float s = bb_h / 1080.0f, cell = g_grid[4] / 0.6f * bb_h;
-    int sw, sh, lsz, b, i, x, y;
+    int sw, sh, lsz, b, i, x, y, bs, pad;
     const WCHAR *p = g_text;
-    RECT all;
+    RECT all, btn[2];
     if (s < 0.85f) s = 0.85f;  /* дрібніше вже не читається */
     sw = (int)(BASE_W * s);
-    sh = (int)(BASE_H * s);
+    sh = (int)(((g_flags & 8) ? SMALL_H : BASE_H) * s);
     lsz = (int)(cell * LETTER_SCALE);
     if (lsz < 8) lsz = 8;
     if (lsz > 128) lsz = 128;
@@ -154,8 +162,18 @@ static void redraw(int bb_w, int bb_h)
     SetRect(&all, 0, 0, g_frame.w, g_frame.h);
     FillRect(g_dc, &all, GetStockObject(BLACK_BRUSH));
     SetBkMode(g_dc, TRANSPARENT);
+    bs = (int)(BTN * s);
+    pad = (int)(3 * s);
+    SetRect(&btn[1], sw - pad - bs, pad, sw - pad, pad + bs);
+    SetRect(&btn[0], sw - pad - 2 * bs, pad, sw - pad - bs, pad + bs);
+    SelectObject(g_dc, g_big);
+    SetTextColor(g_dc, RGB(187, 187, 187));
+    DrawTextW(g_dc, (g_flags & 8) ? L"+" : L"\x2013", 1, &btn[0], DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawTextW(g_dc, L"\x00D7", 1, &btn[1], DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     y = (int)(4 * s);
+    g_margin = 8 + pad + 2 * bs;  /* верхній рядок не залазить під кнопки, лишаючись по центру */
     line(&p, g_big, (g_flags & 2) ? RGB(255, 112, 112) : RGB(255, 255, 255), &y, (int)(28 * s));
+    g_margin = 8;
     line(&p, g_big, RGB(255, 211, 77), &y, (int)(28 * s));
     line(&p, g_small, RGB(208, 208, 208), &y, (int)(23 * s));
     line(&p, g_tiny, RGB(150, 150, 150), &y, (int)(21 * s));
@@ -175,6 +193,10 @@ static void redraw(int bb_w, int bb_h)
     g_frame.q[0] = (struct ovl_quad){(float)((bb_w - sw) / 2), (float)(bb_h * TOP_PERCENT / 100),
                                      (float)sw, (float)sh, 0, 0};
     g_frame.nq = 1;
+    for (i = 0; i < 2; i++) {
+        g_btn[i] = btn[i];
+        OffsetRect(&g_btn[i], (int)g_frame.q[0].x, (int)g_frame.q[0].y);
+    }
     if (g_flags & 4) {  /* літери сітки: клітинка (рядок r, стовпець c), рядок 0 — верхній */
         float inset = cell * 0.06f;
         for (i = 0; i < 12; i++) {
@@ -222,10 +244,43 @@ static int read_text(LONG *seq)
     return 1;
 }
 
-const struct ovl_frame *ovl_frame(int bb_w, int bb_h)
+/* Кліки по кнопках смужки ловимо у вікна гри (у fullscreen мишу бачить тільки воно) і не пускаємо в гру. */
+static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
+{
+    if ((m == WM_LBUTTONDOWN || m == WM_LBUTTONUP || m == WM_LBUTTONDBLCLK) && g_shm && g_frame.version) {
+        RECT rc;
+        POINT pt;
+        int i;
+        GetClientRect(h, &rc);
+        if (rc.right > 0 && rc.bottom > 0) {
+            pt.x = (short)LOWORD(lp) * g_bb_w / rc.right;  /* клієнтська область може бути іншого розміру, ніж backbuffer */
+            pt.y = (short)HIWORD(lp) * g_bb_h / rc.bottom;
+            for (i = 0; i < 2; i++)
+                if (PtInRect(&g_btn[i], pt)) {
+                    if (m != WM_LBUTTONUP) g_shm->clicks += i ? 0x10000 : 1;
+                    return 0;
+                }
+        }
+    }
+    return g_unicode ? CallWindowProcW(g_old_proc, h, m, wp, lp) : CallWindowProcA(g_old_proc, h, m, wp, lp);
+}
+
+static void subclass(HWND wnd)
+{
+    WNDPROC old;
+    if (!wnd || wnd == g_wnd || !IsWindow(wnd)) return;
+    g_unicode = IsWindowUnicode(wnd);
+    old = (WNDPROC)(g_unicode ? SetWindowLongPtrW(wnd, GWLP_WNDPROC, (LONG_PTR)wndproc)
+                              : SetWindowLongPtrA(wnd, GWLP_WNDPROC, (LONG_PTR)wndproc));
+    LOG("subclass %p: old %p", (void *)wnd, (void *)old);
+    if (old) { g_old_proc = old; g_wnd = wnd; }
+}
+
+const struct ovl_frame *ovl_frame(int bb_w, int bb_h, HWND wnd)
 {
     DWORD now = GetTickCount();
     LONG seq;
+    subclass(wnd);
     if (!g_shm && (LONG)(now - g_next_open) >= 0) {
         HANDLE h = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, MAP_NAME);
         g_next_open = now + 2000;

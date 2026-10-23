@@ -28,6 +28,7 @@ static void draw(IDirect3DDevice9 *dev)
     D3DSURFACE_DESC d;
     D3DLOCKED_RECT lr;
     const struct ovl_frame *f;
+    D3DDEVICE_CREATION_PARAMETERS cp;
     struct vtx v[13 * 6];
     int y, n;
 
@@ -36,7 +37,8 @@ static void draw(IDirect3DDevice9 *dev)
     if (FAILED(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &bb))) return;
     IDirect3DSurface9_GetDesc(bb, &d);
     IDirect3DSurface9_Release(bb);
-    if (!(f = ovl_frame(d.Width, d.Height))) return;
+    IDirect3DDevice9_GetCreationParameters(dev, &cp);
+    if (!(f = ovl_frame(d.Width, d.Height, cp.hFocusWindow))) return;
 
     if (!g_tex || g_tw < f->w || g_th < f->h) {
         if (g_tex) IDirect3DTexture9_Release(g_tex);
