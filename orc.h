@@ -7,7 +7,7 @@ struct ovl_quad {
     int u, v;             /* лівий верхній кут у атласі; розмір той самий, що w*h */
 };
 
-/* Атлас (BGRA, з альфою): смужка підказок + 12 літер сітки. */
+/* Атлас (BGRA, з альфою): рядки чату з підказками. */
 struct ovl_frame {
     int w, h;             /* розмір атласу */
     const unsigned *px;   /* w*h пікселів, рядок за рядком */
@@ -18,7 +18,7 @@ struct ovl_frame {
 
 struct vtx { float x, y, z, rhw, u, v; };
 
-/* Викликати раз на кадр з розміром backbuffer і вікном гри (для кліків по кнопках); NULL — нічого не малювати. */
+/* Викликати раз на кадр з розміром backbuffer і вікном гри (для клавіш); NULL — нічого не малювати. */
 const struct ovl_frame *ovl_frame(int bb_w, int bb_h, HWND wnd);
 
 /* Трикутники для DrawPrimitiveUP(TRIANGLELIST); повертає кількість вершин. */

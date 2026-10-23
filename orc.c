@@ -1,58 +1,49 @@
-/* orc_hints.dll — малює підказки orc_overlay.pyw прямо в кадрі Warcraft 3,
- * а також літери гарячих клавіш (як у Reforged) на сітці команд унизу праворуч.
- * Текст і геометрію сітки бере зі спільної пам'яті "Local\OrcOverlay", яку пише Python-оверлей.
+/* orc_hints.dll — підказки з orc_hints.txt рядками в зоні чату Warcraft 3 (1.26a), прямо в кадрі гри,
+ * плюс зум камери на PgUp/PgDn. Таймер стартує сам, коли починається матч.
  * Завантажується WFE (папка Libraries) або будь-яким інжектором. */
 #include "orc.h"
-#include <shellapi.h>
+#include <stdlib.h>
 
-#define MAP_NAME L"Local\\OrcOverlay"
-#define MAP_SIZE 8192
-#define BASE_W 600          /* розмір смужки при висоті екрана 1080, далі масштабується */
-#define BASE_H 106
-#define SMALL_H 36          /* згорнута смужка: лише рядок з таймером */
-#define BTN 26              /* кнопки «згорнути» і «закрити» в правому верхньому куті */
-#define TOP_PERCENT 11      /* відступ зверху, % висоти: щоб не закривати годинник WC3 */
-#define BG_ALPHA 204        /* непрозорість фону, 0..255 (~80%) */
-#define PY_TIMEOUT_MS 3000  /* Python мовчить довше — ховаємо смужку */
-#define LETTER_SCALE 0.40f  /* розмір літери відносно клітинки сітки */
-#define LETTER_RGB RGB(255, 204, 0)  /* колір підсвітки гарячих клавіш WC3 */
+#define HINTS_FILE L"orc_hints.txt"  /* поруч із DLL або на рівень вище */
+#define MAX_MSG 5           /* рядків чату на екрані */
+#define MSG_MS 20000        /* скільки висить кожен рядок */
+#define TIP_SEC 60          /* порада «Чи знали ви?» — раз на хвилину */
+#define RESTART_MS 20000    /* поза матчем довше — наступний матч з 00:00 (меню й пауза не скидають) */
+#define CHAT_X 120          /* лівий край рядків, пікселі при висоті 1080: правіше іконок героїв */
+#define CHAT_BOTTOM 0.70f   /* низ останнього рядка, частка висоти: над консоллю */
+#define LINE_H 28           /* висота рядка при 1080 */
+#define TIME_RGB RGB(255, 204, 0)
+#define TEXT_RGB RGB(255, 255, 255)
 #define ZOOM_STEP 150.0f    /* крок зуму камери на PgUp/PgDn; стандартна дальність 1650 */
 #define ZOOM_MIN 1000.0f
 #define ZOOM_MAX 3500.0f    /* далі гра обрізає землю туманом */
 
-static const WCHAR GRID_KEYS[] = L"QWERASDFZXCV";
-
-struct shared {
-    volatile LONG seq;        /* непарне — Python саме пише */
-    volatile LONG flags;      /* біт 0 — підсвітка рамки, біт 1 — контра, біт 2 — літери сітки */
-    volatile DWORD dll_beat;  /* GetTickCount від DLL: Python ховає своє вікно */
-    volatile DWORD py_beat;   /* GetTickCount від Python */
-    float grid[5];            /* лівий край, низ, крок x, крок y, розмір клітинки — в одиницях UI 0.8 x 0.6 */
-    volatile DWORD clicks;    /* кліки по кнопках: молодші 16 біт — згорнути, старші — закрити */
-    WCHAR text[(MAP_SIZE - 40) / 2];  /* 4 рядки через \n */
-};
-
 volatile int g_in_d3d8;
 static HMODULE g_self;
-static struct shared *g_shm;
-static DWORD g_next_open;
-static LONG g_seq_drawn = -1;
-static int g_bb_w, g_bb_h, g_flags;
-static float g_grid[5];
-static WCHAR g_text[512];
+static HWND g_wnd;
+static WNDPROC g_old_proc;
+static int g_unicode;
+
+/* Підказки: час у секундах (-1 — порада без часу) і текст. */
+static WCHAR g_buf[16384];
+static struct hint { int sec; const WCHAR *text; } g_hints[256];
+static int g_nhints, g_ntips;
+static int g_bag[256], g_nbag;  /* поради в перемішаному порядку, без повторів підряд */
+
+/* Таймер матчу: рахує лише поки йде матч. */
+static DWORD g_last_tick, g_out_since;
+static DWORD g_ms;
+static int g_running, g_next, g_next_tip;
+
+static struct msg { WCHAR text[160]; int prefix; DWORD shown; } g_msgs[MAX_MSG];
+static int g_nmsgs, g_dirty;
 
 static HDC g_dc;
 static HBITMAP g_bmp;
 static unsigned *g_bits;
-static HFONT g_big, g_small, g_tiny, g_letter;
-static int g_sw, g_sh, g_lsz;  /* смужка і літера, для яких створено шрифти */
-static int g_margin;           /* відступ тексту від країв смужки */
+static HFONT g_font;
+static int g_aw, g_ah, g_bb_w, g_bb_h;
 static struct ovl_frame g_frame;
-
-static HWND g_wnd;
-static WNDPROC g_old_proc;
-static int g_unicode;
-static RECT g_btn[2];          /* згорнути, закрити — у пікселях backbuffer */
 
 /* Гаряче латання Microsoft: перед функцією 5 байтів-заповнювачів, на початку "mov edi, edi".
  * Пишемо "jmp hook" у заповнювач і "jmp $-5" поверх mov edi, edi; оригінал далі з fn+2.
@@ -74,74 +65,200 @@ int orc_hotpatch(void *fn, void *hook, void **orig)
     return 1;
 }
 
-static HFONT font(int px, int bold)
+/* game.dll 1.26a; адреси взяті з плагіна Camera.mix (SLAVA_DROM). NULL — не та версія. */
+static BYTE *game(void)
 {
-    return CreateFontW(-px, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                       DEFAULT_PITCH, L"Segoe UI");
+    BYTE *g = (BYTE *)GetModuleHandleA("game.dll");
+    IMAGE_NT_HEADERS *nt;
+    if (!g) return NULL;
+    nt = (IMAGE_NT_HEADERS *)(g + ((IMAGE_DOS_HEADER *)g)->e_lfanew);
+    return nt->OptionalHeader.SizeOfImage > 0xAD15F0 ? g : NULL;
 }
 
-static void resize(int sw, int sh, int lsz, float s)
+static int in_match(BYTE *g)
 {
-    int aw = sw > 12 * lsz ? sw : 12 * lsz, ah = sh + lsz;
-    BITMAPINFO bi = {{sizeof(bi.bmiHeader), aw, -ah, 1, 32, BI_RGB}};
-    if (g_bmp) DeleteObject(g_bmp);
-    if (g_big) { DeleteObject(g_big); DeleteObject(g_small); DeleteObject(g_tiny); DeleteObject(g_letter); }
-    if (!g_dc) g_dc = CreateCompatibleDC(NULL);
-    g_bmp = CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, (void **)&g_bits, NULL, 0);
-    SelectObject(g_dc, g_bmp);
-    g_big = font((int)(20 * s), 1);
-    g_small = font((int)(15 * s), 0);
-    g_tiny = font((int)(13 * s), 0);
-    g_letter = font(lsz * 8 / 10, 1);  /* з запасом на контур, щоб W влазила в клітинку */
-    g_sw = sw; g_sh = sh; g_lsz = lsz;
-    g_frame.w = aw;
-    g_frame.h = ah;
-    g_frame.px = g_bits;
+#ifdef ORC_DEBUG
+    if (!GetModuleHandleA("game.dll")) return 1;  /* тестовий хост без гри */
+#endif
+    return g && *(int *)(g + 0xAB5738) == 4 && *(int *)(g + 0xAB573C) == 4;
 }
 
-static void line(const WCHAR **p, HFONT f, COLORREF c, int *y, int lh)
+static int chat_open(BYTE *g) { return g && g[0xAD15F0] == 1; }
+
+/* Зум: дальність камери — float у game.dll, гра підхоплює його, коли камера зсувається (PgUp+PgDn як системні). */
+static int zoom(WPARAM key)
 {
-    const WCHAR *end = wcschr(*p, L'\n');
-    int n = end ? (int)(end - *p) : lstrlenW(*p);
-    RECT r = {g_margin, *y, g_sw - g_margin, *y + lh};
-    SelectObject(g_dc, f);
-    SetTextColor(g_dc, c);
-    DrawTextW(g_dc, *p, n, &r, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    *p += end ? n + 1 : n;
-    *y += lh;
+    BYTE *g = game();
+    float *dist, v;
+    DWORD old;
+    if (!g || !in_match(g) || chat_open(g)) return 0;
+    dist = (float *)(g + 0x93645C);
+    if (!(*dist > 500 && *dist < 10000)) return 0;  /* не схоже на дальність камери: не та версія */
+    v = *dist + (key == VK_PRIOR ? ZOOM_STEP : -ZOOM_STEP);
+    if (v < ZOOM_MIN) v = ZOOM_MIN;
+    if (v > ZOOM_MAX) v = ZOOM_MAX;
+    VirtualProtect(dist, sizeof *dist, PAGE_READWRITE, &old);
+    *dist = v;
+    VirtualProtect(dist, sizeof *dist, old, &old);
+    PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_PRIOR, 0);
+    PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_NEXT, 0);
+    return 1;
 }
 
-/* Літера з темним контуром: спершу маска контуру, потім маска самої літери. */
-static void glyph(int x0, int y0, WCHAR ch)
+/* Рядки файлу: "m:ss текст" — підказка на цей час, "? текст" — порада, решта (# ...) ігнорується. */
+static void parse_hints(WCHAR *s)
 {
-    static unsigned char outline[128 * 128];
-    int n = g_lsz, o = n / 14 > 1 ? n / 14 : 1, x, y, dx, dy;
-    RECT cell = {x0, y0, x0 + n, y0 + n};
-    unsigned col = ((LETTER_RGB & 0xFF) << 16) | (LETTER_RGB & 0xFF00) | ((LETTER_RGB >> 16) & 0xFF);
-    if (n > 128) return;
-    FillRect(g_dc, &cell, GetStockObject(BLACK_BRUSH));  /* прибрати, що «натекло» від сусідньої літери */
-    SelectObject(g_dc, g_letter);
-    SetTextColor(g_dc, RGB(255, 255, 255));
+    WCHAR *line, *next;
+    for (line = s; line && *line && g_nhints < (int)ARRAYSIZE(g_hints); line = next) {
+        int sec = 0;
+        WCHAR *e, *t = line;
+        next = wcschr(line, L'\n');
+        if (next) *next++ = 0;
+        for (e = line + lstrlenW(line); e > line && (e[-1] == L'\r' || e[-1] == L' '); ) *--e = 0;
+        if (line[0] == L'?') {
+            g_hints[g_nhints++] = (struct hint){-1, line + 1 + (line[1] == L' ')};
+            g_ntips++;
+        } else {
+            while (*t >= L'0' && *t <= L'9') sec = sec * 10 + *t++ - L'0';
+            if (t > line && t[0] == L':' && t[1] >= L'0' && t[1] <= L'5' && t[2] >= L'0' && t[2] <= L'9' && t[3] == L' ')
+                g_hints[g_nhints++] = (struct hint){sec * 60 + (t[1] - L'0') * 10 + t[2] - L'0', t + 4};
+        }
+    }
+}
+
+static int by_time(const void *a, const void *b)
+{
+    return ((const struct hint *)a)->sec - ((const struct hint *)b)->sec;
+}
+
+static void load_hints(void)
+{
+    WCHAR dir[MAX_PATH], path[MAX_PATH];
+    static char raw[sizeof g_buf];
+    int up;
+    GetModuleFileNameW(g_self, dir, MAX_PATH);
+    for (up = 0; up < 2; up++) {
+        WCHAR *slash = wcsrchr(dir, L'\\');
+        HANDLE f;
+        DWORD n = 0;
+        if (!slash) return;
+        *slash = 0;
+        wsprintfW(path, L"%s\\%s", dir, HINTS_FILE);
+        f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+        if (f == INVALID_HANDLE_VALUE) continue;
+        ReadFile(f, raw, sizeof raw - 1, &n, NULL);
+        CloseHandle(f);
+        n = MultiByteToWideChar(CP_UTF8, 0, raw, (int)n, g_buf, ARRAYSIZE(g_buf) - 1);
+        g_buf[n] = 0;
+        parse_hints(g_buf[0] == 0xFEFF ? g_buf + 1 : g_buf);
+        qsort(g_hints, g_nhints, sizeof g_hints[0], by_time);  /* поради (-1) спереду, далі за часом */
+        LOG("hints: %d (%d tips) from %ls", g_nhints, g_ntips, path);
+        return;
+    }
+}
+
+static void say(const WCHAR *prefix, const WCHAR *text)
+{
+    struct msg *m;
+    if (g_nmsgs == MAX_MSG) memmove(g_msgs, g_msgs + 1, sizeof g_msgs[0] * --g_nmsgs);
+    m = &g_msgs[g_nmsgs++];
+    wsprintfW(m->text, L"%s %.140s", prefix, text);
+    m->prefix = lstrlenW(prefix);
+    m->shown = GetTickCount();
+    g_dirty = 1;
+}
+
+static const WCHAR *next_tip(void)
+{
+    int i, j, k;
+    if (!g_ntips) return NULL;
+    if (!g_nbag) {
+        for (i = 0; i < g_nhints; i++)
+            if (g_hints[i].sec < 0) g_bag[g_nbag++] = i;
+        for (i = g_nbag - 1; i > 0; i--) { j = rand() % (i + 1); k = g_bag[i]; g_bag[i] = g_bag[j]; g_bag[j] = k; }
+    }
+    return g_hints[g_bag[--g_nbag]].text;
+}
+
+static void restart(void)
+{
+    g_ms = 0;
+    g_next = 0;
+    g_next_tip = TIP_SEC / 2;
+    g_nmsgs = 0;
+    g_dirty = 1;
+}
+
+/* Раз на кадр: час матчу і нові рядки чату. */
+static void tick(void)
+{
+    DWORD now = GetTickCount(), dt = now - g_last_tick;
+    int sec, i;
+    WCHAR stamp[16];
+    g_last_tick = now;
+    if (!in_match(game())) {
+        if (g_running) { g_running = 0; g_out_since = now; }
+        return;
+    }
+    if (!g_running) {
+        g_running = 1;
+        if (now - g_out_since > RESTART_MS) restart();
+        dt = 0;
+    }
+    g_ms += dt < 1000 ? dt : 0;  /* ponytail: пауза в одиночній грі лічиться, якщо гра лишається «в матчі»; Home — знов з 00:00 */
+    sec = (int)(g_ms / 1000);
+    for (; g_next < g_nhints; g_next++) {
+        if (g_hints[g_next].sec < 0) continue;
+        if (g_hints[g_next].sec > sec) break;
+        wsprintfW(stamp, L"[%02d:%02d]", g_hints[g_next].sec / 60, g_hints[g_next].sec % 60);
+        say(stamp, g_hints[g_next].text);
+        MessageBeep(MB_ICONASTERISK);
+    }
+    if (sec >= g_next_tip) {
+        const WCHAR *tip = next_tip();
+        if (tip) say(L"[Чи знали ви?]", tip);
+        g_next_tip = sec + TIP_SEC;
+    }
+    for (i = 0; i < g_nmsgs && now - g_msgs[i].shown > MSG_MS; i++) {}
+    if (i) {
+        memmove(g_msgs, g_msgs + i, sizeof g_msgs[0] * (g_nmsgs - i));
+        g_nmsgs -= i;
+        g_dirty = 1;
+    }
+}
+
+/* Рядок з темним контуром: спершу маска контуру (текст, зсунутий навсібіч), потім сам текст;
+ * колір — за x: префікс жовтий, решта біла. */
+static void draw_line(int y0, int lh, const struct msg *m)
+{
+    static unsigned char outline[4096 * 64];
+    int o = lh / 14 > 1 ? lh / 14 : 1, x, y, dx, dy, split, len = lstrlenW(m->text);
+    RECT row = {0, y0, g_aw, y0 + lh};
+    SIZE sz;
+    unsigned tc = ((TIME_RGB & 0xFF) << 16) | (TIME_RGB & 0xFF00) | ((TIME_RGB >> 16) & 0xFF);
+    unsigned xc = ((TEXT_RGB & 0xFF) << 16) | (TEXT_RGB & 0xFF00) | ((TEXT_RGB >> 16) & 0xFF);
+    if (g_aw > 4096 || lh > 64) return;
+    GetTextExtentPoint32W(g_dc, m->text, m->prefix, &sz);
+    split = o + sz.cx;
     for (dy = -o; dy <= o; dy++)
         for (dx = -o; dx <= o; dx++) {
-            RECT r = {x0 + o + 1 + dx, y0 + dy, x0 + n + dx, y0 + n + dy};
-            DrawTextW(g_dc, &ch, 1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+            RECT r = {o + dx, y0 + dy, g_aw - o + dx, y0 + lh + dy};
+            DrawTextW(g_dc, m->text, len, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
         }
     GdiFlush();
-    for (y = 0; y < n; y++)
-        for (x = 0; x < n; x++) outline[y * n + x] = (unsigned char)(g_bits[(y0 + y) * g_frame.w + x0 + x] >> 16);
-    FillRect(g_dc, &cell, GetStockObject(BLACK_BRUSH));
+    for (y = 0; y < lh; y++)
+        for (x = 0; x < g_aw; x++) outline[y * g_aw + x] = (unsigned char)(g_bits[(y0 + y) * g_aw + x] >> 16);
+    FillRect(g_dc, &row, GetStockObject(BLACK_BRUSH));
     {
-        RECT r = {x0 + o + 1, y0, x0 + n, y0 + n};
-        DrawTextW(g_dc, &ch, 1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+        RECT r = {o, y0, g_aw - o, y0 + lh};
+        DrawTextW(g_dc, m->text, len, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
     GdiFlush();
-    for (y = 0; y < n; y++)
-        for (x = 0; x < n; x++) {
-            unsigned *p = &g_bits[(y0 + y) * g_frame.w + x0 + x];
-            unsigned a1 = (*p >> 16) & 0xFF, a2 = outline[y * n + x], a = a1 > a2 ? a1 : a2;
-            unsigned k = a ? a1 * 255 / a : 0;  /* частка літери, решта — чорний контур */
+    for (y = 0; y < lh; y++)
+        for (x = 0; x < g_aw; x++) {
+            unsigned *p = &g_bits[(y0 + y) * g_aw + x], col = x < split ? tc : xc;
+            unsigned a1 = (*p >> 16) & 0xFF, a2 = outline[y * g_aw + x], a = a1 > a2 ? a1 : a2;
+            unsigned k = a ? a1 * 255 / a : 0;  /* частка тексту, решта — чорний контур */
             *p = (a << 24) | ((((col >> 16) & 0xFF) * k / 255) << 16) |
                  ((((col >> 8) & 0xFF) * k / 255) << 8) | ((col & 0xFF) * k / 255);
         }
@@ -149,69 +266,38 @@ static void glyph(int x0, int y0, WCHAR ch)
 
 static void redraw(int bb_w, int bb_h)
 {
-    float s = bb_h / 1080.0f, cell = g_grid[4] / 0.6f * bb_h;
-    int sw, sh, lsz, b, i, x, y, bs, pad;
-    const WCHAR *p = g_text;
-    RECT all, btn[2];
+    float s = bb_h / 1080.0f;
+    int lh, aw, ah, i;
     if (s < 0.85f) s = 0.85f;  /* дрібніше вже не читається */
-    sw = (int)(BASE_W * s);
-    sh = (int)(((g_flags & 8) ? SMALL_H : BASE_H) * s);
-    lsz = (int)(cell * LETTER_SCALE);
-    if (lsz < 8) lsz = 8;
-    if (lsz > 128) lsz = 128;
-    if (sw != g_sw || sh != g_sh || lsz != g_lsz) resize(sw, sh, lsz, s);
+    lh = (int)(LINE_H * s);
+    aw = (int)(bb_w * 0.62f);
+    ah = MAX_MSG * lh;
+    if (aw != g_aw || ah != g_ah) {
+        BITMAPINFO bi = {{sizeof(bi.bmiHeader), aw, -ah, 1, 32, BI_RGB}};
+        if (g_bmp) DeleteObject(g_bmp);
+        if (g_font) DeleteObject(g_font);
+        if (!g_dc) g_dc = CreateCompatibleDC(NULL);
+        g_bmp = CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, (void **)&g_bits, NULL, 0);
+        SelectObject(g_dc, g_bmp);
+        g_font = CreateFontW(-(int)(19 * s), 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        g_aw = aw;
+        g_ah = ah;
+        g_frame.w = aw;
+        g_frame.h = ah;
+        g_frame.px = g_bits;
+    }
     if (!g_bits) return;
-
-    SetRect(&all, 0, 0, g_frame.w, g_frame.h);
-    FillRect(g_dc, &all, GetStockObject(BLACK_BRUSH));
     SetBkMode(g_dc, TRANSPARENT);
-    bs = (int)(BTN * s);
-    pad = (int)(3 * s);
-    SetRect(&btn[1], sw - pad - bs, pad, sw - pad, pad + bs);
-    SetRect(&btn[0], sw - pad - 2 * bs, pad, sw - pad - bs, pad + bs);
-    SelectObject(g_dc, g_big);
-    SetTextColor(g_dc, RGB(187, 187, 187));
-    DrawTextW(g_dc, (g_flags & 8) ? L"+" : L"\x2013", 1, &btn[0], DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    DrawTextW(g_dc, L"\x00D7", 1, &btn[1], DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    y = (int)(4 * s);
-    g_margin = 8 + pad + 2 * bs;  /* верхній рядок не залазить під кнопки, лишаючись по центру */
-    line(&p, g_big, (g_flags & 2) ? RGB(255, 112, 112) : RGB(255, 255, 255), &y, (int)(28 * s));
-    g_margin = 8;
-    line(&p, g_big, RGB(255, 211, 77), &y, (int)(28 * s));
-    line(&p, g_small, RGB(208, 208, 208), &y, (int)(23 * s));
-    line(&p, g_tiny, RGB(150, 150, 150), &y, (int)(21 * s));
+    SetTextColor(g_dc, RGB(255, 255, 255));
+    SelectObject(g_dc, g_font);
     GdiFlush();
-    for (y = 0; y < sh; y++)
-        for (x = 0; x < sw; x++) {
-            unsigned *px = &g_bits[y * g_frame.w + x];
-            *px = (*px & 0xFFFFFF) | ((unsigned)BG_ALPHA << 24);
-        }
-    if (g_flags & 1) {  /* жовта рамка на нову підказку */
-        b = (int)(4 * s) > 2 ? (int)(4 * s) : 2;
-        for (y = 0; y < sh; y++)
-            for (x = 0; x < sw; x++)
-                if (x < b || y < b || x >= sw - b || y >= sh - b) g_bits[y * g_frame.w + x] = 0xFFFFCC00;
-    }
-
-    g_frame.q[0] = (struct ovl_quad){(float)((bb_w - sw) / 2), (float)(bb_h * TOP_PERCENT / 100),
-                                     (float)sw, (float)sh, 0, 0};
+    for (i = 0; i < aw * ah; i++) g_bits[i] = 0;  /* порожнє — повністю прозоре */
+    for (i = 0; i < g_nmsgs; i++)  /* найновіший — унизу */
+        draw_line((MAX_MSG - g_nmsgs + i) * lh, lh, &g_msgs[i]);
+    g_frame.q[0] = (struct ovl_quad){(float)(int)(CHAT_X * s), (float)(int)(bb_h * CHAT_BOTTOM - ah),
+                                     (float)aw, (float)ah, 0, 0};
     g_frame.nq = 1;
-    for (i = 0; i < 2; i++) {
-        g_btn[i] = btn[i];
-        OffsetRect(&g_btn[i], (int)g_frame.q[0].x, (int)g_frame.q[0].y);
-    }
-    if (g_flags & 4) {  /* літери сітки: клітинка (рядок r, стовпець c), рядок 0 — верхній */
-        float inset = cell * 0.06f;
-        for (i = 0; i < 12; i++) {
-            int r = i / 4, c = i % 4;
-            float ui_x = g_grid[0] + c * g_grid[2];
-            float ui_top = g_grid[1] + (2 - r) * g_grid[3] + g_grid[4];
-            glyph(i * lsz, sh, GRID_KEYS[i]);
-            g_frame.q[g_frame.nq++] = (struct ovl_quad){ui_x / 0.8f * bb_w + inset,
-                                                        (0.6f - ui_top) / 0.6f * bb_h + inset,
-                                                        (float)lsz, (float)lsz, i * lsz, sh};
-        }
-    }
     g_frame.version++;
 }
 
@@ -231,66 +317,11 @@ int ovl_vertices(const struct ovl_frame *f, int tw, int th, struct vtx *out)
     return n;
 }
 
-/* Копія тексту без розірваних рядків: seqlock, Python робить seq непарним на час запису. */
-static int read_text(LONG *seq)
-{
-    LONG s1 = g_shm->seq;
-    int i;
-    if (s1 & 1) return 0;
-    MemoryBarrier();
-    lstrcpynW(g_text, (const WCHAR *)g_shm->text, ARRAYSIZE(g_text));
-    g_flags = g_shm->flags;
-    for (i = 0; i < 5; i++) g_grid[i] = g_shm->grid[i];
-    MemoryBarrier();
-    if (g_shm->seq != s1) return 0;
-    *seq = s1;
-    return 1;
-}
-
-/* Зум камери для 1.26a, як у плагіні Camera.mix (SLAVA_DROM): дальність камери — float у game.dll,
- * після запису гра підхоплює його, коли камера зсувається (PgUp+PgDn як системні клавіші). */
-static int zoom(WPARAM key)
-{
-    BYTE *g = (BYTE *)GetModuleHandleA("game.dll");
-    IMAGE_NT_HEADERS *nt;
-    float *dist, v;
-    DWORD old;
-    if (!g) return 0;
-    nt = (IMAGE_NT_HEADERS *)(g + ((IMAGE_DOS_HEADER *)g)->e_lfanew);
-    if (nt->OptionalHeader.SizeOfImage <= 0xAD15F0) return 0;  /* не та версія гри */
-    if (*(int *)(g + 0xAB5738) != 4 || *(int *)(g + 0xAB573C) != 4 || g[0xAD15F0] == 1) return 0;  /* не в матчі або відкритий чат */
-    dist = (float *)(g + 0x93645C);
-    if (!(*dist > 500 && *dist < 10000)) return 0;  /* не схоже на дальність камери: не та версія */
-    v = *dist + (key == VK_PRIOR ? ZOOM_STEP : -ZOOM_STEP);
-    if (v < ZOOM_MIN) v = ZOOM_MIN;
-    if (v > ZOOM_MAX) v = ZOOM_MAX;
-    VirtualProtect(dist, sizeof *dist, PAGE_READWRITE, &old);
-    *dist = v;
-    VirtualProtect(dist, sizeof *dist, old, &old);
-    PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_PRIOR, 0);
-    PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_NEXT, 0);
-    return 1;
-}
-
-/* Кліки по кнопках смужки ловимо у вікна гри (у fullscreen мишу бачить тільки воно) і не пускаємо в гру. */
+/* Клавіші ловимо у вікна гри: PgUp/PgDn — зум, Home — таймер знов з 00:00. */
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     if (m == WM_KEYDOWN && (wp == VK_PRIOR || wp == VK_NEXT) && zoom(wp)) return 0;
-    if ((m == WM_LBUTTONDOWN || m == WM_LBUTTONUP || m == WM_LBUTTONDBLCLK) && g_shm && g_frame.version) {
-        RECT rc;
-        POINT pt;
-        int i;
-        GetClientRect(h, &rc);
-        if (rc.right > 0 && rc.bottom > 0) {
-            pt.x = (short)LOWORD(lp) * g_bb_w / rc.right;  /* клієнтська область може бути іншого розміру, ніж backbuffer */
-            pt.y = (short)HIWORD(lp) * g_bb_h / rc.bottom;
-            for (i = 0; i < 2; i++)
-                if (PtInRect(&g_btn[i], pt)) {
-                    if (m != WM_LBUTTONUP) g_shm->clicks += i ? 0x10000 : 1;
-                    return 0;
-                }
-        }
-    }
+    if (m == WM_KEYDOWN && wp == VK_HOME && in_match(game()) && !chat_open(game())) restart();
     return g_unicode ? CallWindowProcW(g_old_proc, h, m, wp, lp) : CallWindowProcA(g_old_proc, h, m, wp, lp);
 }
 
@@ -307,56 +338,16 @@ static void subclass(HWND wnd)
 
 const struct ovl_frame *ovl_frame(int bb_w, int bb_h, HWND wnd)
 {
-    DWORD now = GetTickCount();
-    LONG seq;
     subclass(wnd);
-    if (!g_shm && (LONG)(now - g_next_open) >= 0) {
-        HANDLE h = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, MAP_NAME);
-        g_next_open = now + 2000;
-        LOG("open mapping: %p (err %lu)", h, h ? 0 : GetLastError());
-        if (h) {
-            g_shm = MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, MAP_SIZE);
-            CloseHandle(h);
-        }
-    }
-    if (!g_shm) return NULL;
-    if (now - g_shm->py_beat > PY_TIMEOUT_MS) {  /* оверлей закрили */
-        LOG("python silent: now %lu beat %lu", now, g_shm->py_beat);
-        UnmapViewOfFile((void *)g_shm);
-        g_shm = NULL;
-        g_seq_drawn = -1;
-        return NULL;
-    }
-    g_shm->dll_beat = now;
-    if ((g_shm->seq != g_seq_drawn || bb_w != g_bb_w || bb_h != g_bb_h) && read_text(&seq)) {
-        g_seq_drawn = seq;
+    tick();
+    if (!g_running) return NULL;
+    if (g_dirty || bb_w != g_bb_w || bb_h != g_bb_h) {
+        g_dirty = 0;
         g_bb_w = bb_w;
         g_bb_h = bb_h;
         redraw(bb_w, bb_h);
-        LOG("redraw seq %ld bb %dx%d atlas %dx%d quads %d v%u", seq, bb_w, bb_h, g_frame.w, g_frame.h,
-            g_frame.nq, g_frame.version);
     }
-    return g_frame.version ? &g_frame : NULL;
-}
-
-/* Запускає orc_overlay.pyw, якщо він ще не працює: шукає поруч із DLL і на рівень вище. */
-static void launch_python(void)
-{
-    WCHAR dir[MAX_PATH], path[MAX_PATH];
-    HANDLE h = OpenFileMappingW(FILE_MAP_READ, FALSE, MAP_NAME);
-    int up;
-    if (h) { CloseHandle(h); return; }
-    GetModuleFileNameW(g_self, dir, MAX_PATH);
-    for (up = 0; up < 2; up++) {
-        WCHAR *slash = wcsrchr(dir, L'\\');
-        if (!slash) return;
-        *slash = 0;
-        wsprintfW(path, L"%s\\orc_overlay.pyw", dir);
-        if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
-            ShellExecuteW(NULL, L"open", path, NULL, dir, SW_SHOWNORMAL);
-            return;
-        }
-    }
+    return g_nmsgs ? &g_frame : NULL;
 }
 
 static DWORD WINAPI init(LPVOID unused)
@@ -365,8 +356,8 @@ static DWORD WINAPI init(LPVOID unused)
     HWND wnd;
     int ok8 = 0, ok9 = 0, i;
     (void)unused;
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    launch_python();
+    srand(GetTickCount());
+    load_hints();
 
     /* Тимчасовий пристрій D3D лише для того, щоб знайти код Present/Reset і перехопити його. */
     wc.lpfnWndProc = DefWindowProcW;
@@ -391,6 +382,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = inst;
         DisableThreadLibraryCalls(inst);
+        g_out_since = GetTickCount() - RESTART_MS - 1;
         CloseHandle(CreateThread(NULL, 0, init, NULL, 0, NULL));
     }
     return TRUE;
