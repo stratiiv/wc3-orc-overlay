@@ -8,16 +8,17 @@ Press Alt+number to see how to counter a Night Elf unit. Every 10 seconds the bo
 "Did you know?" tip: control groups, adding units to a group, recommended groups, micro.
 
 It works in **exclusive fullscreen** too. A small DLL draws the hints inside the game frame
-(Direct3D 8 and Direct3D 9). It never reads or writes game memory.
+(Direct3D 8 and Direct3D 9). The only game memory it touches is the camera distance, for the zoom.
 
 ![preview](https://github.com/stratiiv/wc3-orc-overlay/releases/download/v1.0/preview.png)
 
 The hint texts are in Ukrainian. You can translate them in `orc_overlay.pyw` (see [Customizing](#customizing)).
 
 It also adds **Reforged-style grid hotkeys**. Every command-card button gets the key of its position
-(Q W E R / A S D F / Z X C V), and the letter is drawn in the corner of each cell:
+(Q W E R / A S D F / Z X C V).
 
-![grid letters](https://github.com/stratiiv/wc3-orc-overlay/releases/download/v1.0/grid.png)
+**Camera zoom** on `PageUp` / `PageDown` (1.26a only), in steps of 150 between 1000 and 3500
+(the default is 1650). Clear WFE's `CAMERADISTANCE` / `CAMERAHEIGHT` hotkeys so they don't fight over these keys.
 
 ## What's inside
 
@@ -50,7 +51,6 @@ Tested on Warcraft III 1.26a, Windows 11.
    because it writes `CustomKeys.txt` into the game folder). Then in the game turn on
    **Options → Gameplay → Custom Keyboard Shortcuts**.
 6. Start the game with WFE's **Launch** button. The overlay starts by itself and the strip appears in the game.
-   The grid letters show up once you press `Home` to start the timer, and hide again after `End`.
 
 > Third-party DLLs may be banned on community servers (iCCup and others). This overlay is meant
 > for games against the AI.
@@ -76,10 +76,12 @@ The strip has two mouse buttons in its top-right corner: `–` collapses it to t
 - `SPEED` in `orc_overlay.pyw`: adjust it if the timer drifts from the in-game clock.
 - `TOP_PERCENT`, `BASE_W`, `BASE_H`, `BG_ALPHA` in `orc.c`: position, size and opacity of the
   in-game strip. Rebuild the DLL after changing them.
-- `GRID_LETTERS` and `GRID` in `orc_overlay.pyw`: turn the grid letters on or off, and the cell geometry
+- `GRID_LETTERS` and `GRID` in `orc_overlay.pyw`: grid letters drawn by the overlay (off by default: the game
+  with WFE already labels buttons with their real hotkeys, and the two overlapped), and the cell geometry
   in game UI units (0.8 × 0.6 screen). The defaults were measured from the 1.26 console texture. If you
   use WFE's widescreen UI and the letters drift, adjust `GRID`; no rebuild is needed.
 - `LETTER_SCALE` and `LETTER_RGB` in `orc.c`: letter size relative to a cell, and its color.
+- `ZOOM_STEP`, `ZOOM_MIN`, `ZOOM_MAX` in `orc.c`: camera zoom step and limits.
 
 The DLL can't see which buttons a unit actually has, so it draws all 12 letters, empty cells included.
 

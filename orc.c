@@ -16,6 +16,9 @@
 #define PY_TIMEOUT_MS 3000  /* Python мовчить довше — ховаємо смужку */
 #define LETTER_SCALE 0.40f  /* розмір літери відносно клітинки сітки */
 #define LETTER_RGB RGB(255, 204, 0)  /* колір підсвітки гарячих клавіш WC3 */
+#define ZOOM_STEP 150.0f    /* крок зуму камери на PgUp/PgDn; стандартна дальність 1650 */
+#define ZOOM_MIN 1000.0f
+#define ZOOM_MAX 3500.0f    /* далі гра обрізає землю туманом */
 
 static const WCHAR GRID_KEYS[] = L"QWERASDFZXCV";
 
@@ -244,9 +247,35 @@ static int read_text(LONG *seq)
     return 1;
 }
 
+/* Зум камери для 1.26a, як у плагіні Camera.mix (SLAVA_DROM): дальність камери — float у game.dll,
+ * після запису гра підхоплює його, коли камера зсувається (PgUp+PgDn як системні клавіші). */
+static int zoom(WPARAM key)
+{
+    BYTE *g = (BYTE *)GetModuleHandleA("game.dll");
+    IMAGE_NT_HEADERS *nt;
+    float *dist, v;
+    DWORD old;
+    if (!g) return 0;
+    nt = (IMAGE_NT_HEADERS *)(g + ((IMAGE_DOS_HEADER *)g)->e_lfanew);
+    if (nt->OptionalHeader.SizeOfImage <= 0xAD15F0) return 0;  /* не та версія гри */
+    if (*(int *)(g + 0xAB5738) != 4 || *(int *)(g + 0xAB573C) != 4 || g[0xAD15F0] == 1) return 0;  /* не в матчі або відкритий чат */
+    dist = (float *)(g + 0x93645C);
+    if (!(*dist > 500 && *dist < 10000)) return 0;  /* не схоже на дальність камери: не та версія */
+    v = *dist + (key == VK_PRIOR ? ZOOM_STEP : -ZOOM_STEP);
+    if (v < ZOOM_MIN) v = ZOOM_MIN;
+    if (v > ZOOM_MAX) v = ZOOM_MAX;
+    VirtualProtect(dist, sizeof *dist, PAGE_READWRITE, &old);
+    *dist = v;
+    VirtualProtect(dist, sizeof *dist, old, &old);
+    PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_PRIOR, 0);
+    PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_NEXT, 0);
+    return 1;
+}
+
 /* Кліки по кнопках смужки ловимо у вікна гри (у fullscreen мишу бачить тільки воно) і не пускаємо в гру. */
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
+    if (m == WM_KEYDOWN && (wp == VK_PRIOR || wp == VK_NEXT) && zoom(wp)) return 0;
     if ((m == WM_LBUTTONDOWN || m == WM_LBUTTONUP || m == WM_LBUTTONDBLCLK) && g_shm && g_frame.version) {
         RECT rc;
         POINT pt;
