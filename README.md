@@ -13,7 +13,8 @@ It works in **exclusive fullscreen** too. A small DLL draws the lines inside the
 
 It also adds:
 - **Camera zoom** on `PageUp` / `PageDown`, in steps of 150 between 1000 and 3500 (the default is 1650),
-  and **camera tilt** on `Ctrl+PageUp` / `Ctrl+PageDown`.
+  and **camera tilt** on `Ctrl+PageUp` / `Ctrl+PageDown`. Both are remembered in `%APPDATA%\orc_hints.ini`
+  and applied at the start of every match (delete the file to go back to the defaults).
 - **Reforged-style grid hotkeys**: every command-card button gets the key of its position (Q W E R / A S D F / Z X C V).
 
 ## What's inside

@@ -89,23 +89,57 @@ static int in_match(BYTE *g)
 static int chat_open(BYTE *g) { return g && g[0xAD15F0] == 1; }
 
 /* Зум і нахил: дальність і кут камери (для основного рівня зуму коліщатком) — float-и в game.dll,
- * гра підхоплює їх, коли камера зсувається (PgUp+PgDn як системні клавіші). */
-static int camera(WPARAM key, int tilt)
+ * гра підхоплює їх, коли камера зсувається (PgUp+PgDn як системні клавіші).
+ * Останні значення зберігаються в %APPDATA%\orc_hints.ini і ставляться на старті кожного матчу. */
+static WCHAR g_ini[MAX_PATH];
+
+static float *cam(BYTE *g, int tilt)
 {
-    BYTE *g = game();
-    float *f, v, step = tilt ? TILT_STEP : ZOOM_STEP, lo = tilt ? TILT_MIN : ZOOM_MIN, hi = tilt ? TILT_MAX : ZOOM_MAX;
-    DWORD old;
-    if (!g || !in_match(g) || chat_open(g)) return 0;
+    float *f;
+    if (!g) return NULL;
     f = (float *)(g + (tilt ? 0x936438 : 0x93645C));
-    if (tilt ? !(*f > 260 && *f < 360) : !(*f > 500 && *f < 10000)) return 0;  /* не схоже на камеру: не та версія */
-    v = *f + (key == VK_PRIOR ? step : -step);
+    return (tilt ? *f > 260 && *f < 360 : *f > 500 && *f < 10000) ? f : NULL;  /* не схоже на камеру: не та версія */
+}
+
+static void cam_write(float *f, int tilt, float v)
+{
+    float lo = tilt ? TILT_MIN : ZOOM_MIN, hi = tilt ? TILT_MAX : ZOOM_MAX;
+    DWORD old;
     if (v < lo) v = lo;
     if (v > hi) v = hi;
     VirtualProtect(f, sizeof *f, PAGE_READWRITE, &old);
     *f = v;
     VirtualProtect(f, sizeof *f, old, &old);
+}
+
+static void cam_refresh(void)
+{
     PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_PRIOR, 0);
     PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_NEXT, 0);
+}
+
+static void cam_load(BYTE *g)
+{
+    int tilt, v, any = 0;
+    float *f;
+    for (tilt = 0; tilt < 2; tilt++)
+        if ((v = GetPrivateProfileIntW(L"camera", tilt ? L"tilt" : L"zoom", 0, g_ini)) && (f = cam(g, tilt))) {
+            cam_write(f, tilt, (float)v);
+            any = 1;
+        }
+    if (any) cam_refresh();
+}
+
+static int camera(WPARAM key, int tilt)
+{
+    BYTE *g = game();
+    float *f;
+    WCHAR num[16];
+    if (!g || !in_match(g) || chat_open(g) || !(f = cam(g, tilt))) return 0;
+    cam_write(f, tilt, *f + (key == VK_PRIOR ? 1 : -1) * (tilt ? TILT_STEP : ZOOM_STEP));
+    wsprintfW(num, L"%d", (int)*f);
+    WritePrivateProfileStringW(L"camera", tilt ? L"tilt" : L"zoom", num, g_ini);
+    cam_refresh();
     return 1;
 }
 
@@ -207,6 +241,7 @@ static void tick(void)
     if (!g_running) {
         g_running = 1;
         if (now - g_out_since > RESTART_MS) restart();
+        cam_load(game());
         dt = 0;
     }
     g_ms += dt < 1000 ? dt : 0;  /* ponytail: пауза в одиночній грі лічиться, якщо гра лишається «в матчі»; Home — знов з 00:00 */
@@ -361,6 +396,7 @@ static DWORD WINAPI init(LPVOID unused)
     int ok8 = 0, ok9 = 0, i;
     (void)unused;
     srand(GetTickCount());
+    ExpandEnvironmentStringsW(L"%APPDATA%\\orc_hints.ini", g_ini, MAX_PATH);
     load_hints();
 
     /* Тимчасовий пристрій D3D лише для того, щоб знайти код Present/Reset і перехопити його. */
