@@ -1,6 +1,6 @@
 /* orc_hints.dll — підказки з orc_hints.txt рядками в зоні чату Warcraft 3 (1.26a), прямо в кадрі гри,
- * плюс зум камери на PgUp/PgDn. Таймер стартує сам, коли починається матч.
- * Завантажується WFE (папка Libraries) або будь-яким інжектором. */
+ * плюс зум і нахил камери на PgUp/PgDn. Таймер стартує сам, коли починається матч.
+ * Завантажується сама як плагін гри (orc_hints.mix поруч із war3.exe), або WFE (папка Libraries). */
 #include "orc.h"
 #include <stdlib.h>
 
@@ -17,6 +17,9 @@
 #define ZOOM_STEP 150.0f    /* крок зуму камери на PgUp/PgDn; стандартна дальність 1650 */
 #define ZOOM_MIN 1000.0f
 #define ZOOM_MAX 3500.0f    /* далі гра обрізає землю туманом */
+#define TILT_STEP 4.0f      /* нахил на Ctrl+PgUp/PgDn, градуси; стандартно 304 (більше — пологіше) */
+#define TILT_MIN 276.0f     /* майже згори */
+#define TILT_MAX 344.0f
 
 volatile int g_in_d3d8;
 static HMODULE g_self;
@@ -85,21 +88,22 @@ static int in_match(BYTE *g)
 
 static int chat_open(BYTE *g) { return g && g[0xAD15F0] == 1; }
 
-/* Зум: дальність камери — float у game.dll, гра підхоплює його, коли камера зсувається (PgUp+PgDn як системні). */
-static int zoom(WPARAM key)
+/* Зум і нахил: дальність і кут камери (для основного рівня зуму коліщатком) — float-и в game.dll,
+ * гра підхоплює їх, коли камера зсувається (PgUp+PgDn як системні клавіші). */
+static int camera(WPARAM key, int tilt)
 {
     BYTE *g = game();
-    float *dist, v;
+    float *f, v, step = tilt ? TILT_STEP : ZOOM_STEP, lo = tilt ? TILT_MIN : ZOOM_MIN, hi = tilt ? TILT_MAX : ZOOM_MAX;
     DWORD old;
     if (!g || !in_match(g) || chat_open(g)) return 0;
-    dist = (float *)(g + 0x93645C);
-    if (!(*dist > 500 && *dist < 10000)) return 0;  /* не схоже на дальність камери: не та версія */
-    v = *dist + (key == VK_PRIOR ? ZOOM_STEP : -ZOOM_STEP);
-    if (v < ZOOM_MIN) v = ZOOM_MIN;
-    if (v > ZOOM_MAX) v = ZOOM_MAX;
-    VirtualProtect(dist, sizeof *dist, PAGE_READWRITE, &old);
-    *dist = v;
-    VirtualProtect(dist, sizeof *dist, old, &old);
+    f = (float *)(g + (tilt ? 0x936438 : 0x93645C));
+    if (tilt ? !(*f > 260 && *f < 360) : !(*f > 500 && *f < 10000)) return 0;  /* не схоже на камеру: не та версія */
+    v = *f + (key == VK_PRIOR ? step : -step);
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    VirtualProtect(f, sizeof *f, PAGE_READWRITE, &old);
+    *f = v;
+    VirtualProtect(f, sizeof *f, old, &old);
     PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_PRIOR, 0);
     PostMessageW(g_wnd, WM_SYSKEYDOWN, VK_NEXT, 0);
     return 1;
@@ -317,10 +321,10 @@ int ovl_vertices(const struct ovl_frame *f, int tw, int th, struct vtx *out)
     return n;
 }
 
-/* Клавіші ловимо у вікна гри: PgUp/PgDn — зум, Home — таймер знов з 00:00. */
+/* Клавіші ловимо у вікна гри: PgUp/PgDn — зум, Ctrl+PgUp/PgDn — нахил, Home — таймер знов з 00:00. */
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
-    if (m == WM_KEYDOWN && (wp == VK_PRIOR || wp == VK_NEXT) && zoom(wp)) return 0;
+    if (m == WM_KEYDOWN && (wp == VK_PRIOR || wp == VK_NEXT) && camera(wp, GetKeyState(VK_CONTROL) < 0)) return 0;
     if (m == WM_KEYDOWN && wp == VK_HOME && in_match(game()) && !chat_open(game())) restart();
     return g_unicode ? CallWindowProcW(g_old_proc, h, m, wp, lp) : CallWindowProcA(g_old_proc, h, m, wp, lp);
 }
