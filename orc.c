@@ -241,14 +241,16 @@ typedef DWORD(__cdecl *jass_fn)(DWORD, ...);
 #define J_GetUnitX 0x3c5510
 #define J_GetUnitY 0x3c5550
 #define J_GetUnitCurrentOrder 0x3c7780
-#define J_GetResourceAmount 0x3c78b0
+#define J_IsUnitHidden 0x3c7b30
 #define GOLD_MINE 0x6E676F6C        /* 'ngol' */
 #define ORDER_HARVEST 852018
-#define MINE_RANGE 900.0f           /* юніт з наказом «добувати» ближче — рахується цій шахті */
+#define ORDER_RETURN 852017         /* несе золото додому */
+#define MINE_RANGE 900.0f           /* робітник ближче — рахується цій шахті */
 #define MINES_MS 500
+#define MINES_HIST 8                /* показуємо максимум за 8 замірів (4 с): пеони весь час міняють стан */
 
 static DWORD g_grp, g_mines_at;
-static struct msg g_status;         /* рядок «[Шахти] 5/5 (12500)» над чатом */
+static struct msg g_status;         /* рядок «[Шахти] 5/5 · 3/5» над чатом */
 static WCHAR g_mines_text[160];
 
 static float jreal(DWORD v) { float f; memcpy(&f, &v, 4); return f; }
@@ -260,8 +262,10 @@ static float jreal(DWORD v) { float f; memcpy(&f, &v, 4); return f; }
 
 static void count_mines(BYTE *g)
 {
-    struct { float x, y; int n, gold; } m[8];
-    int nm = 0, i, guard;
+    struct { float x, y; int n; } m[8];
+    static unsigned char hist[MINES_HIST][8];
+    static int nhist, last_nm;
+    int nm = 0, i, j, guard;
     DWORD u;
     WCHAR text[160] = L"";
 #ifdef ORC_DEBUG
@@ -274,7 +278,6 @@ static void count_mines(BYTE *g)
         if (nm < 8 && J(J_GetUnitTypeId)(u) == GOLD_MINE) {
             m[nm].x = jreal(J(J_GetUnitX)(u));
             m[nm].y = jreal(J(J_GetUnitY)(u));
-            m[nm].gold = (int)J(J_GetResourceAmount)(u);
             m[nm++].n = 0;
         }
     FOR_UNITS(J(J_GetLocalPlayer)(0), u) {
@@ -288,10 +291,18 @@ static void count_mines(BYTE *g)
 #ifdef ORC_DEBUG
         if (verbose && k >= 0) LOG("  near mine %d: type %.4s order %lu", k, (char *)&(DWORD){_byteswap_ulong(J(J_GetUnitTypeId)(u))}, order);
 #endif
-        if (k >= 0 && order == ORDER_HARVEST) m[k].n++;  /* ponytail: лісоруб біля шахти теж порахується; відрізняти за вантажем, якщо заважатиме */
+        /* добуває, несе золото або сидить у шахті (тоді без наказу й захований) */
+        if (k >= 0 && (order == ORDER_HARVEST || order == ORDER_RETURN || (!order && J(J_IsUnitHidden)(u))))
+            m[k].n++;  /* ponytail: лісоруб чи пеон у Burrow біля шахти теж порахується */
     }
-    for (i = 0; i < nm; i++)
-        if (m[i].n) wsprintfW(text + lstrlenW(text), L"%s%d/5 (%d)", *text ? L" · " : L"", m[i].n, m[i].gold);
+    if (nm != last_nm) { memset(hist, 0, sizeof hist); last_nm = nm; }  /* шахти за порядком у грі; змінився склад — з нуля */
+    for (i = 0; i < nm; i++) {
+        hist[nhist][i] = (unsigned char)m[i].n;
+        for (j = 0; j < MINES_HIST; j++)
+            if (hist[j][i] > m[i].n) m[i].n = hist[j][i];
+        if (m[i].n) wsprintfW(text + lstrlenW(text), L"%s%d/5", *text ? L" · " : L"", m[i].n);
+    }
+    nhist = (nhist + 1) % MINES_HIST;
     if (lstrcmpW(text, g_mines_text)) {
         LOG("mines: %d, %ls", nm, text);
         lstrcpyW(g_mines_text, text);

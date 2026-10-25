@@ -12,8 +12,7 @@ It works in **exclusive fullscreen** too. A small DLL draws the lines inside the
 ![preview](https://github.com/stratiiv/wc3-orc-overlay/releases/download/v1.0/preview.png)
 
 It also adds:
-- **Workers on gold mines**: a line `[Шахти] 5/5 (12500)` above the chat, for each mine your workers harvest,
-  with the gold left in it.
+- **Workers on gold mines**: a line `[Шахти] 5/5 · 3/5` above the chat, one number per mine your workers harvest.
 - **Camera zoom** on `PageUp` / `PageDown`, in steps of 150 between 1000 and 3500 (the default is 1650),
   and **camera tilt** on `Ctrl+PageUp` / `Ctrl+PageDown`. Both are remembered in `%APPDATA%\orc_hints.ini`
   and applied at the start of every match (delete the file to go back to the defaults).
