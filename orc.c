@@ -227,6 +227,80 @@ static void restart(void)
     g_dirty = 1;
 }
 
+/* Пеони на шахтах: рахуємо функціями JASS з game.dll 1.26a (ті самі, що в мапах: __cdecl, хендли — числа,
+ * real повертається бітами float в eax). Адреси знайдено за таблицею реєстрації нативів. */
+typedef DWORD(__cdecl *jass_fn)(DWORD, ...);
+#define J(off) ((jass_fn)(g + (off)))
+#define J_GetLocalPlayer 0x3bbb60
+#define J_Player 0x3bbb30
+#define J_CreateGroup 0x3d2900
+#define J_GroupEnumUnitsOfPlayer 0x3c42c0
+#define J_FirstOfGroup 0x3c4460
+#define J_GroupRemoveUnit 0x3c3ff0
+#define J_GetUnitTypeId 0x3c5910
+#define J_GetUnitX 0x3c5510
+#define J_GetUnitY 0x3c5550
+#define J_GetUnitCurrentOrder 0x3c7780
+#define J_GetResourceAmount 0x3c78b0
+#define GOLD_MINE 0x6E676F6C        /* 'ngol' */
+#define ORDER_HARVEST 852018
+#define MINE_RANGE 900.0f           /* юніт з наказом «добувати» ближче — рахується цій шахті */
+#define MINES_MS 500
+
+static DWORD g_grp, g_mines_at;
+static struct msg g_status;         /* рядок «[Шахти] 5/5 (12500)» над чатом */
+static WCHAR g_mines_text[160];
+
+static float jreal(DWORD v) { float f; memcpy(&f, &v, 4); return f; }
+
+/* Перебирає юнітів гравця по одному, спорожнюючи групу. */
+#define FOR_UNITS(player, u) \
+    for (J(J_GroupEnumUnitsOfPlayer)(g_grp, player, 0), guard = 0; \
+         guard++ < 2000 && ((u) = J(J_FirstOfGroup)(g_grp)) && (J(J_GroupRemoveUnit)(g_grp, u), 1); )
+
+static void count_mines(BYTE *g)
+{
+    struct { float x, y; int n, gold; } m[8];
+    int nm = 0, i, guard;
+    DWORD u;
+    WCHAR text[160] = L"";
+#ifdef ORC_DEBUG
+    static int calls;
+    int verbose = calls++ % 20 == 0;  /* раз на 10 с — накази юнітів біля шахт, щоб звірити */
+#endif
+    if (!g_grp) g_grp = J(J_CreateGroup)(0);
+    if (!g_grp) return;
+    FOR_UNITS(J(J_Player)(15), u)  /* шахти належать нейтральному пасивному гравцю */
+        if (nm < 8 && J(J_GetUnitTypeId)(u) == GOLD_MINE) {
+            m[nm].x = jreal(J(J_GetUnitX)(u));
+            m[nm].y = jreal(J(J_GetUnitY)(u));
+            m[nm].gold = (int)J(J_GetResourceAmount)(u);
+            m[nm++].n = 0;
+        }
+    FOR_UNITS(J(J_GetLocalPlayer)(0), u) {
+        float x = jreal(J(J_GetUnitX)(u)), y = jreal(J(J_GetUnitY)(u)), best = MINE_RANGE * MINE_RANGE;
+        int k = -1;
+        DWORD order = J(J_GetUnitCurrentOrder)(u);
+        for (i = 0; i < nm; i++) {
+            float dx = m[i].x - x, dy = m[i].y - y;
+            if (dx * dx + dy * dy < best) { best = dx * dx + dy * dy; k = i; }
+        }
+#ifdef ORC_DEBUG
+        if (verbose && k >= 0) LOG("  near mine %d: type %.4s order %lu", k, (char *)&(DWORD){_byteswap_ulong(J(J_GetUnitTypeId)(u))}, order);
+#endif
+        if (k >= 0 && order == ORDER_HARVEST) m[k].n++;  /* ponytail: лісоруб біля шахти теж порахується; відрізняти за вантажем, якщо заважатиме */
+    }
+    for (i = 0; i < nm; i++)
+        if (m[i].n) wsprintfW(text + lstrlenW(text), L"%s%d/5 (%d)", *text ? L" · " : L"", m[i].n, m[i].gold);
+    if (lstrcmpW(text, g_mines_text)) {
+        LOG("mines: %d, %ls", nm, text);
+        lstrcpyW(g_mines_text, text);
+        wsprintfW(g_status.text, *text ? L"[Шахти] %s" : L"", text);
+        g_status.prefix = 7;
+        g_dirty = 1;
+    }
+}
+
 /* Раз на кадр: час матчу і нові рядки чату. */
 static void tick(void)
 {
@@ -235,7 +309,7 @@ static void tick(void)
     WCHAR stamp[16];
     g_last_tick = now;
     if (!in_match(game())) {
-        if (g_running) { g_running = 0; g_out_since = now; }
+        if (g_running) { g_running = 0; g_out_since = now; g_grp = 0; g_status.text[0] = g_mines_text[0] = 0; }  /* хендли були цього матчу */
         return;
     }
     if (!g_running) {
@@ -244,6 +318,7 @@ static void tick(void)
         cam_load(game());
         dt = 0;
     }
+    if (game() && now - g_mines_at > MINES_MS) { g_mines_at = now; count_mines(game()); }
     g_ms += dt < 1000 ? dt : 0;  /* ponytail: пауза в одиночній грі лічиться, якщо гра лишається «в матчі»; Home — знов з 00:00 */
     sec = (int)(g_ms / 1000);
     for (; g_next < g_nhints; g_next++) {
@@ -310,7 +385,7 @@ static void redraw(int bb_w, int bb_h)
     if (s < 0.85f) s = 0.85f;  /* дрібніше вже не читається */
     lh = (int)(LINE_H * s);
     aw = (int)(bb_w * 0.62f);
-    ah = MAX_MSG * lh;
+    ah = (MAX_MSG + 1) * lh;  /* верхній рядок — шахти */
     if (aw != g_aw || ah != g_ah) {
         BITMAPINFO bi = {{sizeof(bi.bmiHeader), aw, -ah, 1, 32, BI_RGB}};
         if (g_bmp) DeleteObject(g_bmp);
@@ -333,7 +408,8 @@ static void redraw(int bb_w, int bb_h)
     GdiFlush();
     for (i = 0; i < aw * ah; i++) g_bits[i] = 0;  /* порожнє — повністю прозоре */
     for (i = 0; i < g_nmsgs; i++)  /* найновіший — унизу */
-        draw_line((MAX_MSG - g_nmsgs + i) * lh, lh, &g_msgs[i]);
+        draw_line((MAX_MSG + 1 - g_nmsgs + i) * lh, lh, &g_msgs[i]);
+    if (g_status.text[0]) draw_line(0, lh, &g_status);
     g_frame.q[0] = (struct ovl_quad){(float)(int)(CHAT_X * s), (float)(int)(bb_h * CHAT_BOTTOM - ah),
                                      (float)aw, (float)ah, 0, 0};
     g_frame.nq = 1;
@@ -386,7 +462,7 @@ const struct ovl_frame *ovl_frame(int bb_w, int bb_h, HWND wnd)
         g_bb_h = bb_h;
         redraw(bb_w, bb_h);
     }
-    return g_nmsgs ? &g_frame : NULL;
+    return g_nmsgs || g_status.text[0] ? &g_frame : NULL;
 }
 
 static DWORD WINAPI init(LPVOID unused)
