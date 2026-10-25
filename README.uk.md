@@ -33,11 +33,11 @@
 
 Перевірено на Warcraft III 1.26a, Windows 11.
 
-1. Скопіюйте `orc_hints.dll` у папку гри поруч із `war3.exe` і перейменуйте на **`orc_hints.mix`**.
-   Поруч покладіть `orc_hints.txt`. Гра сама завантажує всі `.mix` зі своєї папки (плагіни звуку Miles),
-   тож інжектити нічого не треба: запускайте гру як завжди.
-2. Якщо користуєтесь і WFE, не кладіть DLL ще й у його папку `Libraries` (завантажиться двічі), і очистіть
-   у WFE хоткеї **Camera Distance** / **Camera Height**, якщо вони на PageUp / PageDown.
+1. Встановіть WFE (Warcraft Feature Extender) і скопіюйте
+   `orc_hints.dll` та `orc_hints.txt` у його папку `Libraries`.
+2. У `Profiles\WFEConfig.ini`, розділ `[LAUNCHER]`, поставте `LOAD_ADD_LIBRARIES = yes` (і `AUTOINJECT_WFE = yes`
+   для функцій самого WFE): тоді **Launch** сам завантажить DLL, без кнопки **Inject**. Очистіть у WFE хоткеї
+   **Camera Distance** / **Camera Height**, якщо вони на PageUp / PageDown.
 3. За бажанням, сіткові хоткеї: встановіть [Python 3](https://www.python.org/downloads/) і запустіть
    `python make_grid_keys.py "C:\Program Files (x86)\Warcraft 3"` (від адміністратора, бо він пише
    `CustomKeys.txt` у папку гри). Потім у грі увімкніть **Options → Gameplay → Custom Keyboard Shortcuts**.

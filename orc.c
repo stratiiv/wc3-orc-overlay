@@ -1,6 +1,6 @@
 /* orc_hints.dll — підказки з orc_hints.txt рядками в зоні чату Warcraft 3 (1.26a), прямо в кадрі гри,
  * плюс зум і нахил камери на PgUp/PgDn. Таймер стартує сам, коли починається матч.
- * Завантажується сама як плагін гри (orc_hints.mix поруч із war3.exe), або WFE (папка Libraries). */
+ * Завантажує WFE з папки Libraries (LOAD_ADD_LIBRARIES = yes у WFEConfig.ini). */
 #include "orc.h"
 #include <stdlib.h>
 

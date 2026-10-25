@@ -32,11 +32,11 @@ A prebuilt `orc_hints.dll` is in [Releases](https://github.com/stratiiv/wc3-orc-
 
 Tested on Warcraft III 1.26a, Windows 11.
 
-1. Copy `orc_hints.dll` into the game folder next to `war3.exe` and rename it to **`orc_hints.mix`**.
-   Put `orc_hints.txt` next to it. The game loads every `.mix` file in its folder by itself (Miles sound
-   plugins), so there is nothing to inject: start the game as usual.
-2. If you use WFE too, don't also put the DLL into WFE's `Libraries` folder (it would load twice), and clear
-   WFE's **Camera Distance** / **Camera Height** hotkeys if they are on PageUp / PageDown.
+1. Install WFE (Warcraft Feature Extender) and copy `orc_hints.dll`
+   and `orc_hints.txt` into its `Libraries` folder.
+2. In `Profiles\WFEConfig.ini`, section `[LAUNCHER]`, set `LOAD_ADD_LIBRARIES = yes` (and `AUTOINJECT_WFE = yes`
+   for WFE's own features), so **Launch** loads the DLL by itself with no **Inject** click. Clear WFE's
+   **Camera Distance** / **Camera Height** hotkeys if they are on PageUp / PageDown.
 3. Optional, grid hotkeys: install [Python 3](https://www.python.org/downloads/) and run
    `python make_grid_keys.py "C:\Program Files (x86)\Warcraft 3"` (as administrator, because it writes
    `CustomKeys.txt` into the game folder). Then in the game turn on **Options → Gameplay → Custom Keyboard Shortcuts**.
