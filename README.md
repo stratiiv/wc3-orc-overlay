@@ -35,8 +35,8 @@ Tested on Warcraft III 1.26a, Windows 11.
 
 1. Install WFE (Warcraft Feature Extender) and copy `orc_hints.dll`
    and `orc_hints.txt` into its `Libraries` folder.
-2. In `Profiles\WFEConfig.ini`, section `[LAUNCHER]`, set `LOAD_ADD_LIBRARIES = yes` (and `AUTOINJECT_WFE = yes`
-   for WFE's own features), so **Launch** loads the DLL by itself with no **Inject** click. Clear WFE's
+2. In `Profiles\WFEConfig.ini`, section `[LAUNCHER]`, set `LOAD_ADD_LIBRARIES = yes` and `AUTOINJECTOR = yes`:
+   while WFE runs (it can sit in the tray), it finds the game and loads its DLL and this one with no **Inject** click. Clear WFE's
    **Camera Distance** / **Camera Height** hotkeys if they are on PageUp / PageDown.
 3. Optional, grid hotkeys: install [Python 3](https://www.python.org/downloads/) and run
    `python make_grid_keys.py "C:\Program Files (x86)\Warcraft 3"` (as administrator, because it writes

@@ -36,8 +36,8 @@
 
 1. Встановіть WFE (Warcraft Feature Extender) і скопіюйте
    `orc_hints.dll` та `orc_hints.txt` у його папку `Libraries`.
-2. У `Profiles\WFEConfig.ini`, розділ `[LAUNCHER]`, поставте `LOAD_ADD_LIBRARIES = yes` (і `AUTOINJECT_WFE = yes`
-   для функцій самого WFE): тоді **Launch** сам завантажить DLL, без кнопки **Inject**. Очистіть у WFE хоткеї
+2. У `Profiles\WFEConfig.ini`, розділ `[LAUNCHER]`, поставте `LOAD_ADD_LIBRARIES = yes` і `AUTOINJECTOR = yes`:
+   поки WFE працює (можна в треї), він сам знайде гру й завантажить свою DLL і цю, без кнопки **Inject**. Очистіть у WFE хоткеї
    **Camera Distance** / **Camera Height**, якщо вони на PageUp / PageDown.
 3. За бажанням, сіткові хоткеї: встановіть [Python 3](https://www.python.org/downloads/) і запустіть
    `python make_grid_keys.py "C:\Program Files (x86)\Warcraft 3"` (від адміністратора, бо він пише
