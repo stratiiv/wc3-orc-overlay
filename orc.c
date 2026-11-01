@@ -1,13 +1,13 @@
 /* orc_hints.dll — підказки з orc_hints.txt рядками в зоні чату Warcraft 3 (1.26a), прямо в кадрі гри,
  * плюс зум і нахил камери на PgUp/PgDn. Таймер стартує сам, коли починається матч.
- * Завантажує WFE з папки Libraries (LOAD_ADD_LIBRARIES і AUTOINJECTOR = yes у WFEConfig.ini). */
+ * Гра завантажує її сама: DLL лежить у папці гри як ijl15.dll, оригінал — як ijl15_orig.dll (див. ijl15.def). */
 #include "orc.h"
 #include <stdlib.h>
 
 #define HINTS_FILE L"orc_hints.txt"  /* поруч із DLL або на рівень вище */
 #define MAX_MSG 5           /* рядків чату на екрані */
+#define HOOK_DELAY_MS 10000 /* DLL вантажиться ще до вікна гри; хуки ставимо, коли D3D гри вже створено */
 #define MSG_MS 20000        /* скільки висить кожен рядок */
-#define TIP_SEC 60          /* порада «Чи знали ви?» — раз на хвилину */
 #define RESTART_MS 20000    /* поза матчем довше — наступний матч з 00:00 (меню й пауза не скидають) */
 #define CHAT_X 120          /* лівий край рядків, пікселі при висоті 1080: правіше іконок героїв */
 #define CHAT_BOTTOM 0.70f   /* низ останнього рядка, частка висоти: над консоллю */
@@ -27,16 +27,15 @@ static HWND g_wnd;
 static WNDPROC g_old_proc;
 static int g_unicode;
 
-/* Підказки: час у секундах (-1 — порада без часу) і текст. */
+/* Підказки: час у секундах і текст. */
 static WCHAR g_buf[16384];
 static struct hint { int sec; const WCHAR *text; } g_hints[256];
-static int g_nhints, g_ntips;
-static int g_bag[256], g_nbag;  /* поради в перемішаному порядку, без повторів підряд */
+static int g_nhints;
 
 /* Таймер матчу: рахує лише поки йде матч. */
 static DWORD g_last_tick, g_out_since;
 static DWORD g_ms;
-static int g_running, g_next, g_next_tip;
+static int g_running, g_next;
 
 static struct msg { WCHAR text[160]; int prefix; DWORD shown; } g_msgs[MAX_MSG];
 static int g_nmsgs, g_dirty;
@@ -143,7 +142,7 @@ static int camera(WPARAM key, int tilt)
     return 1;
 }
 
-/* Рядки файлу: "m:ss текст" — підказка на цей час, "? текст" — порада, решта (# ...) ігнорується. */
+/* Рядки файлу: "m:ss текст" — підказка на цей час, решта (# ...) ігнорується. */
 static void parse_hints(WCHAR *s)
 {
     WCHAR *line, *next;
@@ -153,14 +152,9 @@ static void parse_hints(WCHAR *s)
         next = wcschr(line, L'\n');
         if (next) *next++ = 0;
         for (e = line + lstrlenW(line); e > line && (e[-1] == L'\r' || e[-1] == L' '); ) *--e = 0;
-        if (line[0] == L'?') {
-            g_hints[g_nhints++] = (struct hint){-1, line + 1 + (line[1] == L' ')};
-            g_ntips++;
-        } else {
-            while (*t >= L'0' && *t <= L'9') sec = sec * 10 + *t++ - L'0';
-            if (t > line && t[0] == L':' && t[1] >= L'0' && t[1] <= L'5' && t[2] >= L'0' && t[2] <= L'9' && t[3] == L' ')
-                g_hints[g_nhints++] = (struct hint){sec * 60 + (t[1] - L'0') * 10 + t[2] - L'0', t + 4};
-        }
+        while (*t >= L'0' && *t <= L'9') sec = sec * 10 + *t++ - L'0';
+        if (t > line && t[0] == L':' && t[1] >= L'0' && t[1] <= L'5' && t[2] >= L'0' && t[2] <= L'9' && t[3] == L' ')
+            g_hints[g_nhints++] = (struct hint){sec * 60 + (t[1] - L'0') * 10 + t[2] - L'0', t + 4};
     }
 }
 
@@ -189,8 +183,8 @@ static void load_hints(void)
         n = MultiByteToWideChar(CP_UTF8, 0, raw, (int)n, g_buf, ARRAYSIZE(g_buf) - 1);
         g_buf[n] = 0;
         parse_hints(g_buf[0] == 0xFEFF ? g_buf + 1 : g_buf);
-        qsort(g_hints, g_nhints, sizeof g_hints[0], by_time);  /* поради (-1) спереду, далі за часом */
-        LOG("hints: %d (%d tips) from %ls", g_nhints, g_ntips, path);
+        qsort(g_hints, g_nhints, sizeof g_hints[0], by_time);
+        LOG("hints: %d from %ls", g_nhints, path);
         return;
     }
 }
@@ -206,50 +200,12 @@ static void say(const WCHAR *prefix, const WCHAR *text)
     g_dirty = 1;
 }
 
-static const WCHAR *next_tip(void)
-{
-    int i, j, k;
-    if (!g_ntips) return NULL;
-    if (!g_nbag) {
-        for (i = 0; i < g_nhints; i++)
-            if (g_hints[i].sec < 0) g_bag[g_nbag++] = i;
-        for (i = g_nbag - 1; i > 0; i--) { j = rand() % (i + 1); k = g_bag[i]; g_bag[i] = g_bag[j]; g_bag[j] = k; }
-    }
-    return g_hints[g_bag[--g_nbag]].text;
-}
-
 static void restart(void)
 {
     g_ms = 0;
     g_next = 0;
-    g_next_tip = TIP_SEC / 2;
     g_nmsgs = 0;
     g_dirty = 1;
-}
-
-/* /help у чаті: ловимо коди клавіш, поки поле чату відкрите, тому розкладка неважлива. */
-static int help_key(WPARAM vk, int chat)
-{
-    static BYTE typed[8];
-    static int n;
-    if (!chat) { n = 0; return 0; }
-    if (vk == VK_RETURN) {
-        int hit = n == 5 && (typed[0] == VK_OEM_2 || typed[0] == VK_OEM_5 || typed[0] == VK_DIVIDE) && !memcmp(typed + 1, "HELP", 4);
-        n = 0;
-        return hit;
-    }
-    if (vk == VK_BACK) { if (n) n--; return 0; }
-    if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU) return 0;
-    if (n < (int)sizeof typed) typed[n] = (BYTE)vk;
-    n += n < (int)sizeof typed;
-    return 0;
-}
-
-static void show_help(void)
-{
-    say(L"[/help]", L"PgUp / PgDn — зум камери");
-    say(L"[/help]", L"Ctrl+PgUp / Ctrl+PgDn — нахил камери");
-    say(L"[/help]", L"Home — таймер підказок знову з 00:00");
 }
 
 /* Раз на кадр: час матчу і нові рядки чату. */
@@ -272,16 +228,10 @@ static void tick(void)
     g_ms += dt < 1000 ? dt : 0;  /* ponytail: пауза в одиночній грі лічиться, якщо гра лишається «в матчі»; Home — знов з 00:00 */
     sec = (int)(g_ms / 1000);
     for (; g_next < g_nhints; g_next++) {
-        if (g_hints[g_next].sec < 0) continue;
         if (g_hints[g_next].sec > sec) break;
         wsprintfW(stamp, L"[%02d:%02d]", g_hints[g_next].sec / 60, g_hints[g_next].sec % 60);
         say(stamp, g_hints[g_next].text);
         MessageBeep(MB_ICONASTERISK);
-    }
-    if (sec >= g_next_tip) {
-        const WCHAR *tip = next_tip();
-        if (tip) say(L"[Чи знали ви?]", tip);
-        g_next_tip = sec + TIP_SEC;
     }
     for (i = 0; i < g_nmsgs && now - g_msgs[i].shown > MSG_MS; i++) {}
     if (i) {
@@ -381,12 +331,11 @@ int ovl_vertices(const struct ovl_frame *f, int tw, int th, struct vtx *out)
     return n;
 }
 
-/* Клавіші ловимо у вікна гри: PgUp/PgDn — зум, Ctrl+PgUp/PgDn — нахил, Home — таймер знов з 00:00, /help у чаті. */
+/* Клавіші ловимо у вікна гри: PgUp/PgDn — зум, Ctrl+PgUp/PgDn — нахил, Home — таймер знов з 00:00. */
 static LRESULT CALLBACK wndproc(HWND h, UINT m, WPARAM wp, LPARAM lp)
 {
     if (m == WM_KEYDOWN && (wp == VK_PRIOR || wp == VK_NEXT) && camera(wp, GetKeyState(VK_CONTROL) < 0)) return 0;
     if (m == WM_KEYDOWN && wp == VK_HOME && in_match(game()) && !chat_open(game())) restart();
-    if (m == WM_KEYDOWN && !(lp & 0x40000000) && in_match(game()) && help_key(wp, chat_open(game()))) show_help();
     return g_unicode ? CallWindowProcW(g_old_proc, h, m, wp, lp) : CallWindowProcA(g_old_proc, h, m, wp, lp);
 }
 
@@ -421,7 +370,7 @@ static DWORD WINAPI init(LPVOID unused)
     HWND wnd;
     int ok8 = 0, ok9 = 0, i;
     (void)unused;
-    srand(GetTickCount());
+    Sleep(HOOK_DELAY_MS);
     ExpandEnvironmentStringsW(L"%APPDATA%\\orc_hints.ini", g_ini, MAX_PATH);
     load_hints();
 
