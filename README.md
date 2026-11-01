@@ -45,6 +45,19 @@ Tested on Warcraft III 1.26a, Windows 11.
 
 > Third-party DLLs may be banned on community servers (iCCup and others). This is meant for games against the AI.
 
+## Same setup on another PC
+
+The game, WFE and the lettered icon pack are not in this repo: copy the whole game folder to the other PC first.
+Then close the game and WFE, clone this repo (or download it as a ZIP) and run:
+
+```
+powershell -ExecutionPolicy Bypass -File setup\install.ps1
+```
+
+Add the game folder as an argument if it is not in `C:\Program Files (x86)\Warcraft 3`. The script takes the DLL from the
+release, then installs it with the hints and the WFE config from `setup\` (the old config is kept as `WFEConfig.ini.before_orc_hints`).
+It moves the icons with a wrong letter to `ReplaceableTextures_wrong_letters`, turns off custom hotkeys and restores the saved camera.
+
 ## Keys
 
 | Key | Action |
