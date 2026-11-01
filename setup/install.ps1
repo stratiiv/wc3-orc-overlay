@@ -1,8 +1,6 @@
-# Installs the hint timer and camera into the game folder. WFE is not needed.
-# The game loads ijl15.dll by itself, so ours takes that name and forwards to the real one (ijl15_orig.dll).
-# To undo: delete ijl15.dll and rename ijl15_orig.dll back to ijl15.dll.
-# Also moves icons with a wrong letter away, turns off custom hotkeys, caps the frame rate, restores the saved camera.
-# Close the game first.
+# Puts the same setup on another PC: the DLL and hints in WFE's Libraries, the WFE config,
+# no icons with a wrong letter, default hotkeys, a frame cap, the saved camera.
+# Needs Warcraft III 1.26a and WFE in the game folder. Close the game and WFE first.
 #   powershell -ExecutionPolicy Bypass -File setup\install.ps1 ["C:\path\to\Warcraft 3"]
 param([string]$GameDir = 'C:\Program Files (x86)\Warcraft 3', [string]$Dll, [switch]$FilesOnly)
 $ErrorActionPreference = 'Stop'
@@ -13,13 +11,22 @@ $icons = 'BTNArcher', 'BTNBacktoWork', 'BTNColdArrowsOff', 'BTNColdArrowsOn', 'B
     'BTNStoneForm', 'BTNWispHealOff', 'BTNWispHealOn'
 
 function Install-Files {
-    # Only the first install renames: a second run must not overwrite the real DLL with ours.
-    if (!(Test-Path "$GameDir\ijl15_orig.dll")) { Rename-Item "$GameDir\ijl15.dll" 'ijl15_orig.dll' }
-    Copy-Item $Dll "$GameDir\ijl15.dll" -Force
-    Copy-Item "$repo\orc_hints.txt" "$GameDir\orc_hints.txt" -Force
+    # Undo the short-lived setup that replaced ijl15.dll: put the real DLL back.
+    if (Test-Path "$GameDir\ijl15_orig.dll") { Move-Item "$GameDir\ijl15_orig.dll" "$GameDir\ijl15.dll" -Force }
+    Remove-Item "$GameDir\orc_hints.txt" -ErrorAction SilentlyContinue
 
-    # The old setup loaded the DLL through WFE: without this, WFE would load it a second time.
-    Remove-Item "$GameDir\Libraries\orc_hints.dll", "$GameDir\Libraries\orc_hints.txt" -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force "$GameDir\Libraries", "$GameDir\Profiles" | Out-Null
+    Copy-Item $Dll "$GameDir\Libraries\orc_hints.dll" -Force
+    Copy-Item "$repo\orc_hints.txt" "$GameDir\Libraries\orc_hints.txt" -Force
+
+    $ini = "$GameDir\Profiles\WFEConfig.ini"
+    if (Test-Path $ini) { Copy-Item $ini "$ini.before_orc_hints" -Force }
+    $lines = foreach ($l in [IO.File]::ReadAllLines("$PSScriptRoot\WFEConfig.ini")) {
+        if ($l.StartsWith('GAMEPATH =')) { "GAMEPATH = $GameDir\war3.exe" }
+        elseif ($l.StartsWith('LIBRARIESPATH =')) { "LIBRARIESPATH = $GameDir\Libraries\" }
+        else { $l }
+    }
+    [IO.File]::WriteAllLines($ini, [string[]]$lines)
 
     # Baked-in letters that disagree with the game's hotkeys; the game falls back to its own icon.
     $bak = "$GameDir\ReplaceableTextures_wrong_letters"
@@ -36,8 +43,8 @@ function Install-Files {
 
 if ($FilesOnly) { Install-Files; exit 0 }
 
-if (!(Test-Path "$GameDir\ijl15.dll")) { throw "No ijl15.dll in '$GameDir': is this the game folder?" }
-if (Get-Process war3 -ErrorAction SilentlyContinue) { throw 'Close the game first.' }
+if (!(Test-Path "$GameDir\WFEDll.dll")) { throw "WFE not found in '$GameDir'. Copy the game folder with WFE first." }
+if (Get-Process war3, WFEApp -ErrorAction SilentlyContinue) { throw 'Close the game and WFE first: WFE can overwrite its config.' }
 
 if (!$Dll) { $Dll = "$repo\orc_hints.dll" }
 if (!(Test-Path $Dll)) {
@@ -61,4 +68,4 @@ foreach ($k in 'Gameplay', 'Video') { if (!(Test-Path "$root\$k")) { New-Item "$
 Set-ItemProperty "$root\Gameplay" customkeys 0 -Type DWord
 Set-ItemProperty "$root\Video" maxfps 75 -Type DWord
 if (!(Test-Path "$env:APPDATA\orc_hints.ini")) { Copy-Item "$PSScriptRoot\orc_hints.ini" "$env:APPDATA\orc_hints.ini" }
-Write-Output 'OK. Start the game with war3.exe (not through WFE).'
+Write-Output 'OK. Start the game with WFE: Launch.'

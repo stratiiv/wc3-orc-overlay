@@ -21,8 +21,7 @@ It also adds:
 | File | What it does |
 |------|--------------|
 | `orc_hints.txt` | The hints. Plain text, Ukrainian; edit or translate it, no rebuild needed. |
-| `orc.c`, `d3d8hook.c`, `d3d9hook.c`, `orc.h`, `ijl15.def` | Source of `orc_hints.dll`. |
-| `test_proxy.c` | Checks that the DLL forwards the game's `ijl15` calls and sets its hooks. |
+| `orc.c`, `d3d8hook.c`, `d3d9hook.c`, `orc.h` | Source of `orc_hints.dll`. |
 | `make_grid_keys.py` | Builds a grid `CustomKeys.txt` from your own game files: button positions come from `Units\*Func.txt` in the MPQs, tooltips from the game's `CustomKeysSample.txt` (so they stay in your game's language). Includes a tiny standard-library MPQ reader. |
 | `build.cmd` | Builds the DLL. |
 
@@ -30,22 +29,34 @@ A prebuilt `orc_hints.dll` is in [Releases](https://github.com/stratiiv/wc3-orc-
 
 ## Installation
 
-Tested in a test host on Windows 11; made for Warcraft III 1.26a. WFE is not needed.
+Tested on Warcraft III 1.26a, Windows 11.
 
-1. Close the game, then run `powershell -ExecutionPolicy Bypass -File setup\install.ps1`. Add the game folder as an argument if it is not in `C:\Program Files (x86)\Warcraft 3`.
-2. Start the game with `war3.exe`. About 10 seconds later the DLL is active.
-
-The game itself loads `ijl15.dll` from its folder, so the script renames the real one to `ijl15_orig.dll` and puts this DLL in its place; every `ijl15` call is forwarded. To undo, delete `ijl15.dll` and rename `ijl15_orig.dll` back. If WFE runs alongside (it hides in the tray), it will still inject its own DLL, so close it.
-
-The script also moves the icons with a wrong letter to `ReplaceableTextures_wrong_letters`, turns off custom hotkeys, sets `maxfps` to 75 and copies the default camera if you have none saved.
-
-Optional, grid hotkeys: install [Python 3](https://www.python.org/downloads/) and run `python make_grid_keys.py "C:\Program Files (x86)\Warcraft 3"` as administrator. Then turn on **Options → Gameplay → Custom Keyboard Shortcuts** in the game.
+1. Install WFE (Warcraft Feature Extender) and copy `orc_hints.dll`
+   and `orc_hints.txt` into its `Libraries` folder.
+2. In `Profiles\WFEConfig.ini`, section `[LAUNCHER]`, set `LOAD_ADD_LIBRARIES = yes`, `AUTOINJECTOR = yes`,
+   `PROCESS_SEARCH_DELAY = 10000` and `AUTOINJECT_WFE = no`, then start the game with **Launch**. About 10 seconds later WFE loads its
+   DLL and this one with no **Inject** click. WFE tries only once per game process and gives up if the game window isn't ready yet,
+   which is why its immediate inject (`AUTOINJECT_WFE`) and a short delay do nothing. On a slow PC, raise the delay. Clear WFE's
+   **Camera Distance** / **Camera Height** hotkeys if they are on PageUp / PageDown.
+3. Optional, grid hotkeys: install [Python 3](https://www.python.org/downloads/) and run
+   `python make_grid_keys.py "C:\Program Files (x86)\Warcraft 3"` (as administrator, because it writes
+   `CustomKeys.txt` into the game folder). Then in the game turn on **Options → Gameplay → Custom Keyboard Shortcuts**.
+4. Start a match.
 
 > Third-party DLLs may be banned on community servers (iCCup and others). This is meant for games against the AI.
 
 ## Same setup on another PC
 
-The game and the lettered icon pack are not in this repo: copy the game folder to the other PC, clone this repo (or download it as a ZIP) and run the script above. It downloads the DLL from the release if you have not built it.
+The game, WFE and the lettered icon pack are not in this repo: copy the whole game folder to the other PC first.
+Then close the game and WFE, clone this repo (or download it as a ZIP) and run:
+
+```
+powershell -ExecutionPolicy Bypass -File setup\install.ps1
+```
+
+Add the game folder as an argument if it is not in `C:\Program Files (x86)\Warcraft 3`. The script takes the DLL from the
+release, then installs it with the hints and the WFE config from `setup\` (the old config is kept as `WFEConfig.ini.before_orc_hints`).
+It moves the icons with a wrong letter to `ReplaceableTextures_wrong_letters`, turns off custom hotkeys, sets `maxfps` to 75 and copies the default camera if none is saved.
 
 ## Keys
 
@@ -77,6 +88,7 @@ build.cmd
 - The DLL creates a throwaway D3D8/D3D9 device to find the addresses of `Present` and `Reset`
   in `d3d8.dll` / `d3d9.dll`. On Windows 10/11 every device has its own vtable, so the DLL hooks
   the function code itself, using Microsoft's hot-patch layout (`mov edi, edi` plus 5 padding bytes).
+  If another tool such as WFE has already hooked the function, the DLL chains in front of it.
 - Inside `Present`, it draws the chat lines from one texture atlas and restores the device state with a state block.
   Before `Reset` (for example on Alt+Tab), it releases its resources.
 - It reads two values from `game.dll` 1.26a to know whether a match is running and whether the chat box is open,

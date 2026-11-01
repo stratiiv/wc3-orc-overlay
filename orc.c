@@ -1,12 +1,11 @@
 /* orc_hints.dll — підказки з orc_hints.txt рядками в зоні чату Warcraft 3 (1.26a), прямо в кадрі гри,
  * плюс зум і нахил камери на PgUp/PgDn. Таймер стартує сам, коли починається матч.
- * Гра завантажує її сама: DLL лежить у папці гри як ijl15.dll, оригінал — як ijl15_orig.dll (див. ijl15.def). */
+ * Завантажує WFE з папки Libraries (LOAD_ADD_LIBRARIES і AUTOINJECTOR = yes у WFEConfig.ini). */
 #include "orc.h"
 #include <stdlib.h>
 
 #define HINTS_FILE L"orc_hints.txt"  /* поруч із DLL або на рівень вище */
 #define MAX_MSG 5           /* рядків чату на екрані */
-#define HOOK_DELAY_MS 10000 /* DLL вантажиться ще до вікна гри; хуки ставимо, коли D3D гри вже створено */
 #define MSG_MS 20000        /* скільки висить кожен рядок */
 #define RESTART_MS 20000    /* поза матчем довше — наступний матч з 00:00 (меню й пауза не скидають) */
 #define CHAT_X 120          /* лівий край рядків, пікселі при висоті 1080: правіше іконок героїв */
@@ -370,7 +369,6 @@ static DWORD WINAPI init(LPVOID unused)
     HWND wnd;
     int ok8 = 0, ok9 = 0, i;
     (void)unused;
-    Sleep(HOOK_DELAY_MS);
     ExpandEnvironmentStringsW(L"%APPDATA%\\orc_hints.ini", g_ini, MAX_PATH);
     load_hints();
 
