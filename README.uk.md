@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File setup\install.ps1
 
 Якщо гра не в `C:\Program Files (x86)\Warcraft 3`, додайте її папку аргументом. Скрипт бере DLL з релізу, ставить її разом із
 підказками й налаштуваннями WFE з `setup\` (старі зберігає як `WFEConfig.ini.before_orc_hints`). Іконки з неправильною буквою він
-переносить у `ReplaceableTextures_wrong_letters`, вимикає власні хоткеї, ставить `maxfps` 200 і копіює стандартну камеру, якщо збереженої немає.
+переносить у `ReplaceableTextures_wrong_letters`, вимикає власні хоткеї й копіює стандартну камеру, якщо збереженої немає.
 
 ## Клавіші
 

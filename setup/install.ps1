@@ -63,9 +63,8 @@ else {
 }
 
 # Per-user settings: outside the elevated part, so they land in this user's profile.
-$root = 'HKCU:\Software\Blizzard Entertainment\Warcraft III'
-foreach ($k in 'Gameplay', 'Video') { if (!(Test-Path "$root\$k")) { New-Item "$root\$k" -Force | Out-Null } }
-Set-ItemProperty "$root\Gameplay" customkeys 0 -Type DWord
-Set-ItemProperty "$root\Video" maxfps 200 -Type DWord
+$reg = 'HKCU:\Software\Blizzard Entertainment\Warcraft III\Gameplay'
+if (!(Test-Path $reg)) { New-Item $reg -Force | Out-Null }
+Set-ItemProperty $reg customkeys 0 -Type DWord
 if (!(Test-Path "$env:APPDATA\orc_hints.ini")) { Copy-Item "$PSScriptRoot\orc_hints.ini" "$env:APPDATA\orc_hints.ini" }
 Write-Output 'OK. Start the game with WFE: Launch.'
