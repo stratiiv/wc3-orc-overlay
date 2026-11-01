@@ -56,7 +56,7 @@ powershell -ExecutionPolicy Bypass -File setup\install.ps1
 
 Add the game folder as an argument if it is not in `C:\Program Files (x86)\Warcraft 3`. The script takes the DLL from the
 release, then installs it with the hints and the WFE config from `setup\` (the old config is kept as `WFEConfig.ini.before_orc_hints`).
-It moves the icons with a wrong letter to `ReplaceableTextures_wrong_letters`, turns off custom hotkeys, sets `maxfps` to 75 and copies the default camera if none is saved.
+It moves the icons with a wrong letter to `ReplaceableTextures_wrong_letters`, turns off custom hotkeys, sets `maxfps` to 200 and copies the default camera if none is saved.
 
 ## Keys
 

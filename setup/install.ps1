@@ -1,5 +1,5 @@
 # Puts the same setup on another PC: the DLL and hints in WFE's Libraries, the WFE config,
-# no icons with a wrong letter, default hotkeys, a frame cap, the saved camera.
+# no icons with a wrong letter, default hotkeys, the saved camera.
 # Needs Warcraft III 1.26a and WFE in the game folder. Close the game and WFE first.
 #   powershell -ExecutionPolicy Bypass -File setup\install.ps1 ["C:\path\to\Warcraft 3"]
 param([string]$GameDir = 'C:\Program Files (x86)\Warcraft 3', [string]$Dll, [switch]$FilesOnly)
@@ -66,6 +66,6 @@ else {
 $root = 'HKCU:\Software\Blizzard Entertainment\Warcraft III'
 foreach ($k in 'Gameplay', 'Video') { if (!(Test-Path "$root\$k")) { New-Item "$root\$k" -Force | Out-Null } }
 Set-ItemProperty "$root\Gameplay" customkeys 0 -Type DWord
-Set-ItemProperty "$root\Video" maxfps 75 -Type DWord
+Set-ItemProperty "$root\Video" maxfps 200 -Type DWord
 if (!(Test-Path "$env:APPDATA\orc_hints.ini")) { Copy-Item "$PSScriptRoot\orc_hints.ini" "$env:APPDATA\orc_hints.ini" }
 Write-Output 'OK. Start the game with WFE: Launch.'
